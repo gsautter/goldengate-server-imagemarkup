@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+	Handles the compilation step itself. Especially the classpath is set up
+	here.
+-->
+
+<project name="javac">
+	
+	<!-- set up the classpath for compilation, this should always match the
+	     Eclipse configuration. -->
+	<path id="compile.classpath">
+		<!-- include all .jar in the lib/ directory -->
+	    <fileset dir="${lib.home}">
+	        <include name="*.jar" />
+	    </fileset>
+	</path>
+	
+	<!-- The task off all tasks -->
+	<target name="compile" depends="compileSvr,compileClt" description="Compile GoldenGATE Server Java sources">
+		<!-- only proxy for three compile tasks -->
+	</target>
+	
+	<!-- Compile backend server core and components -->
+	<target name="compileSvr" description="Compile GoldenGATE Server backend Java sources">
+		
+	    <!-- Compile Java classes as necessary -->
+	    <javac destdir="${build.home}/classes" includeantruntime="false" target="1.5" debug="true" debuglevel="lines,vars,source">
+	    	<src path="${src.home}" />
+    		<include name="**/goldenGateServer/imr/*.java" />
+    		<include name="**/goldenGateServer/ims/*.java" />
+    		<include name="**/goldenGateServer/ims/data/*.java" />
+    		<include name="**/goldenGateServer/ims/util/*.java" />
+	        <classpath refid="compile.classpath" />
+	    </javac>
+	</target>
+	
+	<!-- Compile GoldenGATE Editor client plugins if GoldenGATE.jar available -->
+	<target name="check-ggi" unless="ggi.exists">
+		<condition property="ggi.exists">
+			<and>
+				<available file="lib/GgImagine.jar"/>
+				<available file="lib/GoldenGATE.jar"/>
+			</and>
+		</condition> 
+	</target>
+	<target name="compileClt" depends="check-ggi" if="${ggi.exists}" description="Compile GoldenGATE Imagine plugin Java sources">
+		
+	    <!-- Compile Java classes as necessary -->
+	    <javac destdir="${build.home}/classes" includeantruntime="false" target="1.5" debug="true" debuglevel="lines,vars,source">
+	    	<src path="${src.home}" />
+    		<include name="**/goldenGateServer/ims/GoldenGateImsConstants.java" />
+    		<include name="**/goldenGateServer/ims/client/*.java" />
+    		<include name="**/goldenGateServer/ims/data/*.java" />
+	        <classpath refid="compile.classpath" />
+	    </javac>
+	</target>
+</project>

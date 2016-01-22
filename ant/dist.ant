@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+
+<!--
+	Does all the packing. That is, creates the files that live in dist/
+-->
+
+<project name="dist">
+	<target name="zips" depends="backenddocszip,imsdociojar">
+	</target>
+	
+	<target name="backenddocszip" depends="imsjar,imrjar">
+		<delete file="${pack.serverim}"/>
+		<zip destfile="${pack.serverim}">
+			<fileset dir="${dist.home}" includes="Components/**/**" />
+			<fileset dir="." includes="LICENSE.txt"/>
+		</zip>
+	</target>
+	
+	<target name="imsjar">
+		<delete file="${jar.ims}" />
+		<jar destfile="${jar.ims}" manifest="${file.home}/MANIFEST.components.MF">
+			<fileset dir="${build.home}/classes">
+				<include name="**/goldenGateServer/ims/*.class" />
+				<include name="**/goldenGateServer/ims/data/*.class" />
+				<include name="**/goldenGateServer/ims/util/*.class" />
+			</fileset>
+			<fileset dir="${src.home}">
+				<include name="**/goldenGateServer/ims/*.java" />
+				<include name="**/goldenGateServer/ims/data/*.java" />
+				<include name="**/goldenGateServer/ims/util/*.java" />
+			</fileset>
+			<fileset dir="." includes="LICENSE.txt"/>
+		</jar>
+	</target>
+	
+	<target name="imrjar">
+		<delete file="${jar.imr}" />
+		<jar destfile="${jar.imr}" manifest="${file.home}/MANIFEST.components.MF">
+			<fileset dir="${build.home}/classes">
+				<include name="**/goldenGateServer/imr/*.class" />
+			</fileset>
+			<fileset dir="${src.home}">
+				<include name="**/goldenGateServer/imr/*.java" />
+			</fileset>
+			<fileset dir="." includes="LICENSE.txt"/>
+		</jar>
+	</target>
+	
+	<target name="check-ggi" unless="ggi.exists">
+		<condition property="ggi.exists">
+			<and>
+				<available file="lib/GgImagine.jar"/>
+				<available file="lib/GoldenGATE.jar"/>
+			</and>
+		</condition> 
+	</target>
+	<target name="imsdociojar" depends="check-ggi" if="${ggi.exists}">
+		<delete file="${jar.imsdocio}" />
+		<jar destfile="${jar.imsdocio}" manifest="${file.home}/MANIFEST.components.MF">
+			<fileset dir="${build.home}/classes">
+				<include name="**/goldenGateServer/ims/GoldenGateImsConstants*.class" />
+				<include name="**/goldenGateServer/ims/client/GoldenGateImsClient*.class" />
+				<include name="**/goldenGateServer/ims/client/GoldenGateImsDocumentIO*.class" />
+				<include name="**/goldenGateServer/ims/data/*.class" />
+			</fileset>
+			<fileset dir="${src.home}">
+				<include name="**/goldenGateServer/ims/GoldenGateImsConstants.java" />
+				<include name="**/goldenGateServer/ims/client/GoldenGateImsClient.java" />
+				<include name="**/goldenGateServer/ims/client/GoldenGateImsDocumentIO.java" />
+				<include name="**/goldenGateServer/ims/data/*.java" />
+			</fileset>
+			<fileset dir="." includes="LICENSE.txt"/>
+		</jar>
+	</target>
+</project>

@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+
+<!--
+	Fetches OpenStringPool and RefParse from projects existing in same workspace
+-->
+
+<project name="import">
+	<target name="fetch" depends="fetch-su,fetch-hxu,fetch-gamta,fetch-eio,fetch-iclibs,fetch-im,fetch-gg,fetch-ggi" />
+	
+	
+	<target name="check-fetch-su" unless="su.exists">
+		<available property="su.exists" file="../idaho-core/dist/StringUtils.jar"/>
+	</target>
+	<target name="fetch-su" depends="check-fetch-su" if="${su.exists}">
+    	<copy file="../idaho-core/dist/StringUtils.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+	</target>
+	
+	<target name="check-fetch-hxu" unless="hxu.exists">
+		<available property="hxu.exists" file="../idaho-core/dist/HtmlXmlUtil.jar"/>
+	</target>
+	<target name="fetch-hxu" depends="check-fetch-hxu" if="${hxu.exists}">
+    	<copy file="../idaho-core/dist/HtmlXmlUtil.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+	</target>
+	
+	<target name="check-fetch-gamta" unless="gamta.exists">
+		<available property="gamta.exists" file="../idaho-core/dist/Gamta.jar"/>
+	</target>
+	<target name="fetch-gamta" depends="check-fetch-gamta" if="${gamta.exists}">
+    	<copy file="../idaho-core/dist/Gamta.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+	</target>
+	
+	<target name="check-fetch-eio" unless="eio.exists">
+		<available property="eio.exists" file="../idaho-core/dist/EasyIO.jar"/>
+	</target>
+	<target name="fetch-eio" depends="check-fetch-eio" if="${eio.exists}">
+    	<copy file="../idaho-core/dist/EasyIO.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+	</target>
+	
+	<target name="check-fetch-im" unless="im.exists">
+		<available property="im.exists" file="../idaho-imagemarkup/dist/ImageMarkup.jar"/>
+	</target>
+	<target name="fetch-im" depends="check-fetch-im" if="${im.exists}">
+    	<copy file="../idaho-imagemarkup/dist/ImageMarkup.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+		<copy file="../idaho-imagemarkup/dist/ImageMarkupOCR.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+	</target>
+	
+	<target name="check-fetch-gg" unless="gg.exists">
+		<available property="gg.exists" file="../goldengate-editor/dist/GoldenGATE.jar"/>
+	</target>
+	<target name="fetch-gg" depends="check-fetch-gg" if="${gg.exists}">
+    	<copy file="../goldengate-editor/dist/GoldenGATE.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+	</target>
+	
+	<target name="check-fetch-ggi" unless="ggi.exists">
+		<available property="ggi.exists" file="../goldengate-imagine/dist/GgImagine.jar"/>
+	</target>
+	<target name="fetch-ggi" depends="check-fetch-ggi" if="${ggi.exists}">
+    	<copy file="../goldengate-imagine/dist/GgImagine.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+	</target>
+	
+	<target name="check-fetch-iclibs" unless="iclibs.exists">
+		<available property="iclibs.exists" file="../idaho-core/lib/mail.jar"/>
+	</target>
+	<target name="fetch-iclibs" depends="check-fetch-iclibs" if="${iclibs.exists}">
+    	<copy todir="${lib.home}" overwrite="true" verbose="false">
+    		<fileset dir="../idaho-core/lib/" includes="**.jar"/>
+    	</copy>
+	</target>
+</project>
