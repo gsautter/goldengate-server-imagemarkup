@@ -918,21 +918,43 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 				
 				//	check document entry file
 				File docEntryListFile = new File(this.entryDataFolder, ("entries" + ((version == 0) ? "" : ("." + version)) + ".txt"));
-				if (!docEntryListFile.exists())
-					throw new IOException("Invalid version number " + version + " for document ID '" + this.docId + "'");
-				BufferedReader entryIn = new BufferedReader(new InputStreamReader(new FileInputStream(docEntryListFile), ENCODING));
 				
-				//	read provenance attributes from first line
-				String attributeString = entryIn.readLine();
-				ImDocumentIO.setAttributes(this, attributeString);
-				
-				//	read document entry list
-				for (String entryString; (entryString = entryIn.readLine()) != null;) {
-					ImDocumentEntry entry = ImDocumentEntry.fromTabString(entryString);
-					if (entry != null)
-						this.putEntry(entry);
+				//	read entry list
+				if (docEntryListFile.exists()) {
+					BufferedReader entryIn = new BufferedReader(new InputStreamReader(new FileInputStream(docEntryListFile), ENCODING));
+					
+					//	read provenance attributes from first line
+					String attributeString = entryIn.readLine();
+					ImDocumentIO.setAttributes(this, attributeString);
+					
+					//	read document entry list
+					for (String entryString; (entryString = entryIn.readLine()) != null;) {
+						ImDocumentEntry entry = ImDocumentEntry.fromTabString(entryString);
+						if (entry != null)
+							this.putEntry(entry);
+					}
+					entryIn.close();
 				}
-				entryIn.close();
+				
+				//	report invalid version number only for explicit version (if no current version exists, something might have gone wrong on document creation)
+				else if (version != 0)
+					throw new IOException("Invalid version number " + version + " for document ID '" + this.docId + "'");
+//				
+//				if (!docEntryListFile.exists())
+//					throw new IOException("Invalid version number " + version + " for document ID '" + this.docId + "'");
+//				BufferedReader entryIn = new BufferedReader(new InputStreamReader(new FileInputStream(docEntryListFile), ENCODING));
+//				
+//				//	read provenance attributes from first line
+//				String attributeString = entryIn.readLine();
+//				ImDocumentIO.setAttributes(this, attributeString);
+//				
+//				//	read document entry list
+//				for (String entryString; (entryString = entryIn.readLine()) != null;) {
+//					ImDocumentEntry entry = ImDocumentEntry.fromTabString(entryString);
+//					if (entry != null)
+//						this.putEntry(entry);
+//				}
+//				entryIn.close();
 			}
 		}
 		

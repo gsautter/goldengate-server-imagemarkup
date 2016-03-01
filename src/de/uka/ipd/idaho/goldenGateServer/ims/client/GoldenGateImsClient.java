@@ -769,6 +769,7 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 					zout.write(buffer, 0, r);
 				cacheIn.close();
 				zout.closeEntry();
+				
 			}
 			ZipEntry ze = new ZipEntry(updateKey);
 			zout.putNextEntry(ze);
@@ -917,7 +918,7 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 	}
 	
 	/**
-	 * @param args
+	 * @param args 
 	 */
 	public static void main(String[] args) throws Exception {
 		ServerConnection sc = ServerConnection.getServerConnection("localhost", 8015);

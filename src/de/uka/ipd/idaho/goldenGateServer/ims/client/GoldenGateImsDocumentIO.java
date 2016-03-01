@@ -234,6 +234,8 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 		//	release document if checked out explicitly
 		if ((this.cache == null) || !this.cache.isExplicitCheckout(docId)) try {
 			this.imsClient.releaseDocument(docId);
+			if (this.cache != null)
+				this.cache.unstoreDocument(docId);
 		}
 		catch (IOException ioe) {
 			ioe.printStackTrace(System.out);
@@ -245,7 +247,7 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 	 * @see de.uka.ipd.idaho.im.imagine.plugins.ImageDocumentIoProvider#loadDocument(de.uka.ipd.idaho.gamta.util.ProgressMonitor)
 	 */
 	public ImDocument loadDocument(final ProgressMonitor pm) {
-		System.out.println("DioDocumentIO (" + this.getClass().getName() + "): loading document");
+		System.out.println("ImsDocumentIO (" + this.getClass().getName() + "): loading document");
 		pm.setInfo("Checking authentication at GoldenGATE Server ...");
 		if (pm instanceof ControllingProgressMonitor) {
 			((ControllingProgressMonitor) pm).setPauseResumeEnabled(true);
@@ -328,8 +330,13 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 			dld.setLocationRelativeTo(DialogPanel.getTopWindow());
 			dld.setVisible(true);
 			
+			//	get selected document
+			ImDocumentData docData = dld.getDocumentData();
+			if (docData == null)
+				return null;
+			
 			//	load selected document
-			ImDocument doc = ImDocumentIO.loadDocument(dld.getDocumentData(), pm);
+			ImDocument doc = ImDocumentIO.loadDocument(docData, pm);
 			
 			//	remember opening document, so we can release it when it's closed
 			this.openDocumentIDs.add(doc.docId);
