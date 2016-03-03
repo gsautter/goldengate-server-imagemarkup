@@ -110,16 +110,27 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		String colName;
 		int colLength;
 		boolean isInteger;
-		String attribName;
-		DocumentAttribute(String colName, int colLength, String attribName) {
+//		String attribName;
+		String[] attribNames;
+//		DocumentAttribute(String colName, int colLength, String attribName) {
+		DocumentAttribute(String colName, int colLength, String[] attribNames) {
 			this.colName = colName;
 			this.colLength = colLength;
 			this.isInteger = (this.colLength < 1);
-			this.attribName = attribName;
+//			this.attribName = attribName;
+			this.attribNames = attribNames;
 		}
-		
+		private String getValueFor(Attributed doc) {
+			for (int a = 0; a < this.attribNames.length; a++) {
+				String value = ((String) doc.getAttribute(this.attribNames[a]));
+				if (value != null)
+					return value;
+			}
+			return null;
+		}
 		String getInsertQueryValue(Attributed doc) {
-			String value = ((String) doc.getAttribute(this.attribName));
+//			String value = ((String) doc.getAttribute(this.attribName));
+			String value = this.getValueFor(doc);
 			if (value == null)
 				return (this.isInteger ? "0" : "");
 			if (this.isInteger) {
@@ -130,7 +141,8 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		}
 		
 		String getUpdateQueryAssignment(Attributed doc) {
-			return this.getUpdateQueryAssignment((String) doc.getAttribute(this.attribName));
+//			return this.getUpdateQueryAssignment((String) doc.getAttribute(this.attribName));
+			return this.getUpdateQueryAssignment(this.getValueFor(doc));
 		}
 		String getUpdateQueryAssignment(String value) {
 			if (value == null)
@@ -149,7 +161,8 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		static DocumentAttribute parseDocumentAttribute(String daData) {
 			String[] dad = daData.split("\\t", 3);
 			try {
-				return new DocumentAttribute(dad[0], Integer.parseInt(dad[1]), dad[2]);
+//				return new DocumentAttribute(dad[0], Integer.parseInt(dad[1]), dad[2]);
+				return new DocumentAttribute(dad[0], Integer.parseInt(dad[1]), dad[2].split("\\s+"));
 			}
 			catch (RuntimeException re /* number format as well as array length */ ) {
 				return null;
@@ -939,22 +952,6 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 				//	report invalid version number only for explicit version (if no current version exists, something might have gone wrong on document creation)
 				else if (version != 0)
 					throw new IOException("Invalid version number " + version + " for document ID '" + this.docId + "'");
-//				
-//				if (!docEntryListFile.exists())
-//					throw new IOException("Invalid version number " + version + " for document ID '" + this.docId + "'");
-//				BufferedReader entryIn = new BufferedReader(new InputStreamReader(new FileInputStream(docEntryListFile), ENCODING));
-//				
-//				//	read provenance attributes from first line
-//				String attributeString = entryIn.readLine();
-//				ImDocumentIO.setAttributes(this, attributeString);
-//				
-//				//	read document entry list
-//				for (String entryString; (entryString = entryIn.readLine()) != null;) {
-//					ImDocumentEntry entry = ImDocumentEntry.fromTabString(entryString);
-//					if (entry != null)
-//						this.putEntry(entry);
-//				}
-//				entryIn.close();
 			}
 		}
 		
@@ -1158,6 +1155,10 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		}
 	}
 	
+	private static class DummyEventLogger implements EventLogger {
+		public void writeLog(String logEntry) {}
+	}
+	
 	private ImsDocumentData getDocumentData(String docId, boolean create, boolean loadEntries) throws IOException {
 		String primaryFolderName = docId.substring(0, 2);
 		String secondaryFolderName = docId.substring(2, 4);
@@ -1211,7 +1212,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 			throw new IOException("Document already exists, upload not possible.");
 		
 		//	do update
-		return this.doDocumentUpdate(userName, null, doc, logger);
+		return this.doDocumentUpdate(userName, null, doc, ((logger == null) ? new DummyEventLogger() : logger));
 	}
 	
 	/**
@@ -1240,7 +1241,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 			throw new IOException("Document checked out by other user, update not possible.");
 		
 		//	do update
-		return this.doDocumentUpdate(userName, authUserName, doc, logger);
+		return this.doDocumentUpdate(userName, authUserName, doc, ((logger == null) ? new DummyEventLogger() : logger));
 	}
 	
 	private int doDocumentUpdate(String userName, String authUserName, ImDocument doc, final EventLogger logger) throws IOException {
@@ -1292,20 +1293,14 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	 * @throws IOException
 	 */
 	public synchronized int uploadDocumentFromData(String userName, ImsDocumentData docData, EventLogger logger) throws IOException {
-		if (docData instanceof ImsDocumentData) {
-			
-			//	make our lives easier
-			ImsDocumentData iDocData = ((ImsDocumentData) docData);
-			
-			// get checkout user (must be null if document is new)
-			String checkoutUser = this.getCheckoutUser(iDocData.docId);
-			if (checkoutUser != null)
-				throw new IOException("Document already exists, upload not possible.");
-			
-			//	do update
-			return this.finalizeDocumentUpdate(iDocData, userName, null, null);
-		}
-		else return -1;
+		
+		// get checkout user (must be null if document is new)
+		String checkoutUser = this.getCheckoutUser(docData.docId);
+		if (checkoutUser != null)
+			throw new IOException("Document already exists, upload not possible.");
+		
+		//	do update
+		return this.finalizeDocumentUpdate(docData, userName, null, ((logger == null) ? new DummyEventLogger() : logger));
 	}
 	
 	/**
@@ -1325,19 +1320,13 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	 * @throws IOException
 	 */
 	public int updateDocumentFromData(String userName, String authUserName, ImsDocumentData docData, EventLogger logger) throws IOException {
-		if (docData instanceof ImsDocumentData) {
-			
-			//	make our lives easier
-			ImsDocumentData iDocData = ((ImsDocumentData) docData);
-			
-			// check if document checked out
-			if (!this.mayUpdateDocument(authUserName, iDocData.docId))
-				throw new IOException("Document checked out by other user, update not possible.");
-			
-			//	do update
-			return this.finalizeDocumentUpdate(iDocData, userName, authUserName, null);
-		}
-		else return -1;
+		
+		// check if document checked out
+		if (!this.mayUpdateDocument(authUserName, docData.docId))
+			throw new IOException("Document checked out by other user, update not possible.");
+		
+		//	do update
+		return this.finalizeDocumentUpdate(docData, userName, authUserName, ((logger == null) ? new DummyEventLogger() : logger));
 	}
 	
 	private int finalizeDocumentUpdate(final ImsDocumentData docData, final String updateUser, final String checkoutUser, final EventLogger logger) throws IOException {
@@ -1653,7 +1642,8 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	 * such document exists and the create argument is false, this method
 	 * returns null. If the create argument is true, this method returns an
 	 * initially empty document data object that can be populated by client
-	 * code and then stored via any of the 
+	 * code and then stored via either <code>updateDocumentFromData()</code>
+	 * or <code>uploadDocumentFromData()</code>.
 	 * @param docId the document ID
 	 * @param create create a document data object if no document exists?
 	 * @return a date object for the document with the argument ID
