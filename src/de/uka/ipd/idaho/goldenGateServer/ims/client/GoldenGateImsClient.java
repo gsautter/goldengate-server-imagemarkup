@@ -32,6 +32,8 @@ import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FilterOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -92,10 +94,122 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 		public abstract void storeEntryList(ImDocumentData docData) throws IOException;
 	}
 	
+	/**
+	 * Image Markup document data object loading entries on demand from a backing
+	 * GoldenGATE Image Markup Store. Once an entry is loaded, it is cached in the
+	 * document data object handed to the constructor. Entries that are updated are
+	 * first stored in that document data object as well, and only calling the
+	 * <code>pushUpdates()</code> will send the updates to the backing IMS.
+	 * 
+	 * @author sautter
+	 */
+	public static class ImsClientDocumentData extends ImDocumentData {
+		private ImDocumentData localDocData;
+		private String docId;
+		private GoldenGateImsClient imsClient;
+		
+		/** Constructor
+		 * @param docId the ID of the document represented by this data object
+		 * @param entries the document entries available remotely
+		 * @param imsClient the IMS client to use for server interaction
+		 * @param localDocData the document data object to use for local storage
+		 * @throws IOException
+		 */
+		public ImsClientDocumentData(String docId, ImDocumentEntry[] entries, GoldenGateImsClient imsClient, ImDocumentData localDocData) throws IOException {
+			this.imsClient = imsClient;
+			this.docId = docId;
+			this.localDocData = localDocData;
+			
+			//	put existing entries from local data
+			ImDocumentEntry[] localEntries = this.localDocData.getEntries();
+			for (int e = 0; e < localEntries.length; e++)
+				this.putEntry(localEntries[e]);
+			
+			//	put entries only second, to give priority to remote versions
+			for (int e = 0; e < entries.length; e++)
+				this.putEntry(entries[e]);
+		}
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.util.ImDocumentData#hasEntryData(de.uka.ipd.idaho.im.util.ImDocumentData.ImDocumentEntry)
+		 */
+		public boolean hasEntryData(ImDocumentEntry entry) {
+			if (this.localDocData.hasEntryData(entry))
+				return true;
+			ImDocumentEntry imsEntry = this.getEntry(entry.name);
+			return entry.getFileName().equals(imsEntry.getFileName());
+		}
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.util.ImDocumentData#getInputStream(java.lang.String)
+		 */
+		public InputStream getInputStream(String entryName) throws IOException {
+			ImDocumentEntry entry = this.getEntry(entryName);
+			
+			//	we don't know this entry at all, not even remotely
+			if (entry == null)
+				throw new FileNotFoundException(entryName);
+			
+			//	entry data already local
+			if (this.localDocData.hasEntryData(entry))
+				return this.localDocData.getInputStream(entryName);
+			
+			//	fetch entry from backing IMS
+			return this.imsClient.getDocumentEntry(this.docId, entry, this);
+		}
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.util.ImDocumentData#getOutputStream(java.lang.String, boolean)
+		 */
+		public OutputStream getOutputStream(final String entryName, boolean writeDirectly) throws IOException {
+			return new FilterOutputStream(this.localDocData.getOutputStream(entryName, writeDirectly)) {
+				public void write(int b) throws IOException {
+					this.out.write(b);
+				}
+				public void write(byte[] b) throws IOException {
+					this.out.write(b);
+				}
+				public void write(byte[] b, int off, int len) throws IOException {
+					this.out.write(b, off, len);
+				}
+				public void flush() throws IOException {
+					this.out.flush();
+				}
+				public void close() throws IOException {
+					this.out.close();
+					putEntry(localDocData.getEntry(entryName));
+				}
+			};
+		}
+		
+		//	TODO consider adding fetchAll() method
+		
+		//	TODO consider adding pushUpdates() method
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.util.ImDocumentData#getDocumentDataId()
+		 */
+		public String getDocumentDataId() {
+			return this.localDocData.getDocumentDataId();
+		}
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.util.ImDocumentData#canLoadDocument()
+		 */
+		public boolean canLoadDocument() {
+			return this.hasEntry("document.csv");
+		}
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.util.ImDocumentData#canStoreDocument()
+		 */
+		public boolean canStoreDocument() {
+			return this.localDocData.canLoadDocument();
+		}
+	}
+	
 	private AuthenticatedClient authClient;
 	private DocumentDataCache dataCache;
-	
-	//	TODO implement on-demand data fetching interface
 	
 	/** Constructor
 	 * @param authClient the authenticated client to use for communication
@@ -337,6 +451,10 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 		
 		//	TODO add fetchFast flag to indicate fetching entries only on demand (supplements !!!)
 		
+		//	TODO also facilitate specifying range of pages to load images for (opening two pages out of 150 !!!)
+		
+		//	TODO use ImsClientDocumentData wrapper for that
+		
 		//	make sure we're logged in
 		if (!this.authClient.isLoggedIn()) throw new IOException("Not logged in.");
 		Connection con = null;
@@ -403,49 +521,7 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 		pm.setMaxProgress(50);
 		if (toFetchDocEntries.isEmpty())
 			pm.setProgress(100);
-		else try {
-			pm.setInfo("Fetching " + toFetchDocEntries.size() + " entries from server ...");
-			con = this.authClient.getConnection();
-			BufferedWriter bw = con.getWriter();
-			bw.write(GET_DOCUMENT_ENTRIES);
-			bw.newLine();
-			bw.write(this.authClient.getSessionID());
-			bw.newLine();
-			bw.write(docId);
-			bw.newLine();
-			for (int e = 0; e < toFetchDocEntries.size(); e++) {
-				bw.write(((ImDocumentEntry) toFetchDocEntries.get(e)).toTabString());
-				bw.newLine();
-			}
-			bw.newLine();
-			bw.flush();
-			
-			pm.setInfo("Receiving entries ...");
-			
-			BufferedLineInputStream blis = con.getInputStream();
-			String error = blis.readLine();
-			if (!command.equals(error))
-				throw new IOException(error);
-			
-			ZipInputStream zin = new ZipInputStream(blis);
-			byte[] buffer = new byte[1024];
-			for (ZipEntry ze; (ze = zin.getNextEntry()) != null;) {
-				ImDocumentEntry docEntry = new ImDocumentEntry(ze);
-				pm.setInfo(" - " + docEntry.name);
-				pm.setProgress((0 * 100) / toFetchDocEntries.size());
-				OutputStream cacheOut = docData.getOutputStream(docEntry, true);
-				for (int r; (r = zin.read(buffer, 0, buffer.length)) != -1;)
-					cacheOut.write(buffer, 0, r);
-				cacheOut.flush();
-				cacheOut.close();
-			}
-			pm.setProgress(100);
-		}
-		finally {
-			if (con != null)
-				con.close();
-			con = null;
-		}
+		else this.getDocumentEntries(docId, ((ImDocumentEntry[]) toFetchDocEntries.toArray(new ImDocumentEntry[toFetchDocEntries.size()])), docData, pm);
 		
 		//	TODO in fastFetch mode, let's specify ourselves as the data provider to below method
 		
@@ -454,6 +530,83 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 		
 		//	finally
 		return docData;
+	}
+	
+//	/**
+//	 * Obtain an input stream fetching an individual document entry from the
+//	 * backing IMS. If there are multiple entries to fetch, it is far more
+//	 * efficient to use the <code>getDocumentEntries()</code> method.
+//	 * @param docId the ID of the document the entry belongs to
+//	 * @param entry the entry to fetch the data for
+//	 * @return an input stream to read the entry data from
+//	 * @throws IOException
+//	 */
+//	private InputStream getDocumentEntry(String docId, ImDocumentEntry entry) throws IOException {
+//		return this.getDocumentEntry(docId, entry, null);
+//	}
+//	
+//	/**
+//	 * Obtain an input stream fetching an individual document entry from the
+//	 * backing IMS. If there are multiple entries to fetch, it is far more
+//	 * efficient to use the <code>getDocumentEntries()</code> method.
+//	 * @param docId the ID of the document the entry belongs to
+//	 * @param entry the entry to fetch the data for
+//	 * @param docData the document data object to store the entry data in
+//	 * @return an input stream to read the entry data from
+//	 * @throws IOException
+//	 */
+	private InputStream getDocumentEntry(String docId, ImDocumentEntry entry, ImDocumentData docData) throws IOException {
+		ImDocumentEntry[] entries = {entry};
+		this.getDocumentEntries(docId, entries, docData, null);
+		return docData.getInputStream(entry);
+	}
+	private void getDocumentEntries(String docId, ImDocumentEntry[] entries, ImDocumentData docData, ProgressMonitor pm) throws IOException {
+		Connection con = null;
+		try {
+			con = this.authClient.getConnection();
+			BufferedWriter bw = con.getWriter();
+			bw.write(GET_DOCUMENT_ENTRIES);
+			bw.newLine();
+			bw.write(this.authClient.getSessionID());
+			bw.newLine();
+			bw.write(docId);
+			bw.newLine();
+			for (int e = 0; e < entries.length; e++) {
+				bw.write(entries[e].toTabString());
+				bw.newLine();
+			}
+			bw.newLine();
+			bw.flush();
+			
+			BufferedLineInputStream blis = con.getInputStream();
+			String error = blis.readLine();
+			if (!GET_DOCUMENT_ENTRIES.equals(error))
+				throw new IOException(error);
+			
+			ZipInputStream zin = new ZipInputStream(blis);
+			int zeCount = 0;
+			byte[] buffer = new byte[1024];
+			for (ZipEntry ze; (ze = zin.getNextEntry()) != null;) {
+				zeCount++;
+				ImDocumentEntry docEntry = new ImDocumentEntry(ze);
+				if (pm != null) {
+					pm.setInfo(" - " + docEntry.name);
+					pm.setProgress((zeCount * 100) / entries.length);
+				}
+				OutputStream cacheOut = docData.getOutputStream(docEntry, true);
+				for (int r; (r = zin.read(buffer, 0, buffer.length)) != -1;)
+					cacheOut.write(buffer, 0, r);
+				cacheOut.flush();
+				cacheOut.close();
+			}
+			if (pm != null)
+				pm.setProgress(100);
+		}
+		finally {
+			if (con != null)
+				con.close();
+			con = null;
+		}
 	}
 	
 	/**
@@ -667,6 +820,9 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 		 * - BUT THEN it's sufficient to put client document folder on RAM disc ...
 		 * - ... OR directly hand it the storage folder to write to the final destination (breach of encapsulation, but saves tons of copying effort)
 		 *  */
+		
+		// 	TODO if we have an on-demand fetching document data object, upload only entries whose data is available
+		//	TODO and then, the rest will be unmodified, so server won't ever ask for entries that were never fetched
 		
 		//	make sure we're logged in
 		if (!this.authClient.isLoggedIn()) throw new IOException("Not logged in.");

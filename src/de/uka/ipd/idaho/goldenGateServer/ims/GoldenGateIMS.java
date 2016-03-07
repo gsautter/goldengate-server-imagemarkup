@@ -569,6 +569,9 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 					return;
 				}
 				
+				//	announce entries coming
+				output.writeLine(GET_DOCUMENT_ENTRIES);
+				
 				//	send requested entries
 				ZipOutputStream zout = new ZipOutputStream(output);
 				byte[] buffer = new byte[1024];
@@ -1264,7 +1267,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		Arrays.sort(docEntries);
 		
 		//	finalize update
-		return this.finalizeDocumentUpdate(new DocumentUpdate(docData, new HashSet(), userName, authUserName), logger);
+		return this.finalizeDocumentUpdate(new DocumentUpdate(docData, new HashSet(), authUserName, userName), logger);
 	}
 	
 	private int finalizeDocumentUpdate(DocumentUpdate docUpdate, EventLogger logger) throws IOException {
