@@ -38,9 +38,11 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 
+import de.uka.ipd.idaho.easyIO.settings.Settings;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
 import de.uka.ipd.idaho.goldenGateServer.imi.GoldenGateIMI.ImiDocumentImport;
 import de.uka.ipd.idaho.goldenGateServer.imi.ImiDocumentImporter;
+import de.uka.ipd.idaho.goldenGateServer.ims.util.StandaloneDocumentStyleProvider;
 import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.util.ImDocumentIO;
 import de.uka.ipd.idaho.stringUtils.StringVector;
@@ -51,6 +53,9 @@ import de.uka.ipd.idaho.stringUtils.StringVector;
  * @author sautter
  */
 public class PdfImporter extends ImiDocumentImporter {
+	private String docStyleListUrl;
+	private String docStyleNamePattern;
+	private File docStyleFolder;
 	
 	/** the usual zero-argument constructor for class loading */
 	public PdfImporter() {}
@@ -67,6 +72,21 @@ public class PdfImporter extends ImiDocumentImporter {
 	 */
 	public void init() {
 		
+		//	load settings from data path
+		Settings config = Settings.loadSettings(new File(this.dataPath, "config.cnfg"));
+		
+		//	make document style templates available (we can do without, however)
+		this.docStyleListUrl = config.getSetting("docStyleListUrl");
+		if (this.docStyleListUrl != null) try {
+			this.docStyleNamePattern = config.getSetting("docStyleNamePattern");
+			this.docStyleFolder = new File(this.workingFolder, "DocStyles");
+			this.docStyleFolder.mkdirs();
+			new StandaloneDocumentStyleProvider(this.docStyleListUrl, this.docStyleNamePattern, this.docStyleFolder);
+		}
+		catch (IOException ioe) {
+			ioe.printStackTrace(System.out);
+		}
+		
 		//	install base JARs
 		this.installJar("StringUtils.jar");
 		this.installJar("HtmlXmlUtil.jar");
@@ -74,6 +94,7 @@ public class PdfImporter extends ImiDocumentImporter {
 		this.installJar("mail.jar");
 		this.installJar("EasyIO.jar");
 		this.installJar("GamtaImagingAPI.jar");
+		this.installJar("BibRefUtils.jar");
 		
 		//	install image markup and OCR JARs
 		this.installJar("ImageMarkup.jar");
@@ -84,11 +105,24 @@ public class PdfImporter extends ImiDocumentImporter {
 		this.installJar("icepdf-core.jar");
 		this.installJar("ImageMarkupPDF.jar");
 		this.installJar("ImageMarkupPDF.bin.jar");
+		
+		//	install own source JAR to run slave from
+		this.installJar(null);
 	}
 	
 	private void installJar(String name) {
-		System.out.println("Installing JAR '" + name + "'");
-		File source = new File(this.dataPath, name);
+		File source;
+		if (name == null) {
+			name = this.dataPath.getName();
+			name = name.substring(0, (name.length() - "Data".length()));
+			name = (name + ".jar");
+			System.out.println("Installing JAR '" + name + "'");
+			source = new File(this.dataPath.getAbsoluteFile().getParentFile(), name);
+		}
+		else {
+			System.out.println("Installing JAR '" + name + "'");
+			source = new File(this.dataPath, name);
+		}
 		if (!source.exists())
 			throw new RuntimeException("Missing JAR: " + name);
 		
@@ -166,7 +200,7 @@ public class PdfImporter extends ImiDocumentImporter {
 		command.addElement("java");
 		command.addElement("-jar");
 		command.addElement("-Xmx1024m");
-		command.addElement("ImageMarkupPDF.jar");
+		command.addElement("PdfImporter.jar");
 		
 		//	add parameters
 		command.addElement("-s"); // source: file from importer job
@@ -175,12 +209,12 @@ public class PdfImporter extends ImiDocumentImporter {
 		command.addElement(docCacheFolder.getAbsolutePath());
 		command.addElement("-p"); // CPU usage: single (slower, but we don't want to knock out the whole server)
 		command.addElement("S");
+		if (this.docStyleFolder != null) {
+			command.addElement("-y"); // style path: the folder holding document styles
+			command.addElement(this.docStyleFolder.getAbsolutePath());
+		}
 		command.addElement("-t"); // PDF type: generic
 		command.addElement(pdfType);
-		command.addElement("-l"); // log mode: remote progress monitor over streams
-		command.addElement("M");
-		command.addElement("-m"); // output mode: Image Markup directory (saves all the zipping and un-zipping effort)
-		command.addElement("D");
 		command.addElement("-o"); // output destination: document output folder
 		command.addElement(docOutFolder.getAbsolutePath());
 		
@@ -210,7 +244,7 @@ public class PdfImporter extends ImiDocumentImporter {
 			else if (inLine.startsWith("P:")) {}
 			else if (inLine.startsWith("BP:")) {}
 			else if (inLine.startsWith("MP:")) {}
-			else break;
+			else System.out.println(inLine);
 		}
 		
 		//	wait for decoder to finish

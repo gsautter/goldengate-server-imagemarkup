@@ -34,8 +34,11 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedList;
 
@@ -358,10 +361,19 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent {
 				});
 		System.out.println("Importers loaded");
 		
-		//	store importers
+		//	store importers, and sort them by priority
 		ImiDocumentImporter[] importers = new ImiDocumentImporter[importerObjects.length];
 		for (int i = 0; i < importerObjects.length; i++)
 			importers[i] = ((ImiDocumentImporter) importerObjects[i]);
+		Arrays.sort(importers, new Comparator() {
+			public int compare(Object obj1, Object obj2) {
+				ImiDocumentImporter idi1 = ((ImiDocumentImporter) obj1);
+				ImiDocumentImporter idi2 = ((ImiDocumentImporter) obj2);
+				return (idi2.getPrority() - idi1.getPrority());
+			}
+		});
+		
+		//	make importers available
 		this.importers = importers;
 		System.out.println("Importers registered");
 	}
@@ -394,6 +406,9 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent {
 		this.shutdownImporters();
 	}
 	
+	private static final String IMPORT_DOCUMENT_COMMAND = "import";
+	private static final String RELOAD_IMPORTERS_COMMAND = "reload";
+	
 	/*
 	 * (non-Javadoc)
 	 * @see de.goldenGateScf.ServerComponent#getActions()
@@ -402,9 +417,54 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent {
 		ArrayList cal = new ArrayList();
 		ComponentAction ca;
 		
-		//	TODO schedule URL import (good for testing)
+		//	schedule URL import (good for testing)
+		ca = new ComponentActionConsole() {
+			public String getActionCommand() {
+				return IMPORT_DOCUMENT_COMMAND;
+			}
+			public String[] getExplanation() {
+				String[] explanation = {
+						IMPORT_DOCUMENT_COMMAND + " <documentUrl> <documentMimeType>",
+						"Import a document from a URL:",
+						"- <documentUrl>: The URL to import the document from",
+						"- <documentMimeType>: The MIME type of the document (optional, defaults to 'application/pdf')"
+					};
+				return explanation;
+			}
+			public void performActionConsole(String[] arguments) {
+				try {
+					if (arguments.length == 1)
+						scheduleImport("application/pdf", new URL(arguments[0]), null);
+					else if (arguments.length == 2)
+						scheduleImport(arguments[1], new URL(arguments[0]), null);
+					else System.out.println(" Invalid arguments for '" + this.getActionCommand() + "', specify the document URL and MIME type as the only arguments.");
+				}
+				catch (MalformedURLException mue) {
+					System.out.println(" '" + arguments[0] + "' is not a valid URL.");
+				}
+			}
+		};
+		cal.add(ca);
 		
-		//	TODO reload importers
+		//	reload importers
+		ca = new ComponentActionConsole() {
+			public String getActionCommand() {
+				return RELOAD_IMPORTERS_COMMAND;
+			}
+			public String[] getExplanation() {
+				String[] explanation = {
+						RELOAD_IMPORTERS_COMMAND,
+						"Reload the importers currently installed in this DIC."
+					};
+				return explanation;
+			}
+			public void performActionConsole(String[] arguments) {
+				if (arguments.length == 0)
+					loadImporters(true);
+				else System.out.println(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
+			}
+		};
+		cal.add(ca);
 		
 		//	finally ...
 		return ((ComponentAction[]) cal.toArray(new ComponentAction[cal.size()]));
@@ -418,6 +478,7 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent {
 	 */
 	public void scheduleImport(String mimeType, URL url, Attributed attributes) {
 		ImiDocumentImport idi = new ImiDocumentImport(mimeType, url);
+		idi.setAttribute(ImDocument.DOCUMENT_SOURCE_LINK_ATTRIBUTE, url.toString());
 		if (attributes != null)
 			AttributeUtils.copyAttributes(attributes, idi);
 		this.enqueueImport(idi);

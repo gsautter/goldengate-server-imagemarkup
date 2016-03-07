@@ -67,11 +67,25 @@ public abstract class ImiDocumentImporter {
 	
 	/**
 	 * Get the name of the importer. The name returned by this method must be a
-	 * valid file name. It best consists of letters, digits, and underscores
-	 * only.
+	 * valid file name. It best consists of letters, digits, underscores, and
+	 * dashes only.
 	 * @return the importer name
 	 */
 	public abstract String getName();
+	
+	/**
+	 * Get the priority of the importer, on a 0-10 scale. Higher priority
+	 * importers will be asked to handle a given import before lower priority
+	 * ones. Thus, importers that handle a very specific type of imports only,
+	 * e.g. documents with specific metadata attributes, should return a higher
+	 * value from this method, whereas more generic importers should return a
+	 * lower value. This default implementation returns 0, sub classes are
+	 * welcome to overwrite it as needed.
+	 * @return the priority of the importer.
+	 */
+	public int getPrority() {
+		return 0;
+	}
 	
 	/**
 	 * Set the component host, providing access to a database, etc.

@@ -51,7 +51,7 @@ public class PdfImporterTest {
 	}
 	
 	//	having this extra method is basically to enable testing the import independent of having a host IMI around
-	private static void doHandleImport(File docInFile, File docCacheFolder, File docOutFolder) throws IOException {
+	private static void doHandleImport(File docInFile, File docCacheFolder, File docOutFolder, boolean useMultipleCores) throws IOException {
 		
 		//	assemble command
 		Vector command = new Vector();
@@ -66,7 +66,7 @@ public class PdfImporterTest {
 		command.addElement("-c"); // cache: cache folder
 		command.addElement(docCacheFolder.getAbsolutePath());
 		command.addElement("-p"); // CPU usage: single (slower, but we don't want to knock out the whole server)
-		command.addElement("S");
+		command.addElement(useMultipleCores ? "M" : "S");
 		command.addElement("-t"); // PDF type: generic
 		command.addElement("G");
 		command.addElement("-l"); // log mode: remote progress monitor over streams
@@ -118,6 +118,7 @@ public class PdfImporterTest {
 	public static void main(String[] args) throws Exception {
 		String pdfPath = args[0];
 		String pdfName = pdfPath.substring(pdfPath.lastIndexOf('/') + 1);
+		boolean useMultipleCores = ((args.length >= 2) && "M".equals(args[1]));
 		
 		//	create document cache folder
 		File docCacheFolder = new File(cacheFolder, ("cache-" + pdfName));
@@ -138,7 +139,7 @@ public class PdfImporterTest {
 		else docInFile = new File("./" + pdfPath);
 		
 		//	import document (it's enough to see it's there, no need for loading it)
-		doHandleImport(docInFile, docCacheFolder, docOutFolder);
+		doHandleImport(docInFile, docCacheFolder, docOutFolder, useMultipleCores);
 		System.out.println("Import done");
 //		
 //		//	hand document back to caller via idi.setDocument()
