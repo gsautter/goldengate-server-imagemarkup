@@ -1693,10 +1693,8 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	}
 	
 	/**
-	 * Load a document from storage (the most recent version). This method loops
-	 * through to the underlying DST, it exists so other components do not have
-	 * to deal with two different storage components. The document is not
-	 * locked, so any attempt of an update will fail.
+	 * Load a document data object from storage (the most recent version). The
+	 * document is not locked, so any attempt of an update will fail.
 	 * @param documentId the ID of the document to load
 	 * @return the document with the specified ID
 	 * @throws IOException
@@ -1714,7 +1712,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	 * not locked, so any attempt of an update will fail.
 	 * @param documentId the ID of the document to load
 	 * @param version the version to load
-	 * @return the document with the specified ID
+	 * @return a data object of the document with the specified ID
 	 * @throws IOException
 	 */
 	public ImsDocumentData getDocumentAsData(String documentId, int version) throws IOException {

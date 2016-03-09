@@ -378,17 +378,28 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 		}
 		
 		try {
+			
+			//	facilitate aborting upload
 			if (pm instanceof ControllingProgressMonitor) {
 				((ControllingProgressMonitor) pm).setPauseResumeEnabled(true);
 				((ControllingProgressMonitor) pm).setAbortEnabled(true);
 				((ControllingProgressMonitor) pm).setAbortExceptionMessage("ABORTED BY USER");
 			}
+			
+			//	upload document
 			String[] uploadProtocol = this.imsClient.updateDocument(doc, pm);
+			
+			//	mark cache as clean
 			if (this.cache != null) {
 				this.cache.markNotDirty(doc.docId);
 				if (pm != null)
 					pm.setInfo("Cache updated.");
 			}
+			
+			//	remember document open on server, so we can release it when it's closed
+			this.openDocumentIDs.add(doc.docId);
+			
+			//	incrementally get upload protocol
 			final UploadProtocolDialog upDialog = new UploadProtocolDialog("Document Upload Protocol", ("Document '" + docName + "' successfully uploaded to GoldenGATE Server at\n" + authManager.getHost() + ":" + authManager.getPort() + "\nDetails:"), uploadProtocol);
 			Thread upThread = new Thread() {
 				public void run() {
