@@ -129,7 +129,6 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 			return null;
 		}
 		String getInsertQueryValue(Attributed doc) {
-//			String value = ((String) doc.getAttribute(this.attribName));
 			String value = this.getValueFor(doc);
 			if (value == null)
 				return (this.isInteger ? "0" : "");
@@ -137,11 +136,14 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 				value = value.replaceAll("[^0-9]", "");
 				return ((value.length() == 0) ? "0" : value);
 			}
-			else return EasyIO.sqlEscape(value);
+			else {
+				if (value.length() > this.colLength)
+					value = value.substring(0, this.colLength);
+				return EasyIO.sqlEscape(value);
+			}
 		}
 		
 		String getUpdateQueryAssignment(Attributed doc) {
-//			return this.getUpdateQueryAssignment((String) doc.getAttribute(this.attribName));
 			return this.getUpdateQueryAssignment(this.getValueFor(doc));
 		}
 		String getUpdateQueryAssignment(String value) {
@@ -161,7 +163,6 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		static DocumentAttribute parseDocumentAttribute(String daData) {
 			String[] dad = daData.split("\\t", 3);
 			try {
-//				return new DocumentAttribute(dad[0], Integer.parseInt(dad[1]), dad[2]);
 				return new DocumentAttribute(dad[0], Integer.parseInt(dad[1]), dad[2].split("\\s+"));
 			}
 			catch (RuntimeException re /* number format as well as array length */ ) {
