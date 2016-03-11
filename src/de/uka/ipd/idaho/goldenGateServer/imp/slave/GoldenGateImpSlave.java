@@ -187,7 +187,6 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 		try {
 			
 			//	load document from folder
-			//	TODO use specialized document data object fetching entries on demand from master process
 			ImDocumentData docData = new FolderImDocumentData(new File(docRootPath), null);
 			ImDocument doc = ImDocumentIO.loadDocument(docData, pm);
 			

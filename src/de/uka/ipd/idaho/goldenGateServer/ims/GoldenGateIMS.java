@@ -180,6 +180,8 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		this.getListFieldSummary(fieldName, true).add(fieldValue);
 	}
 	private void cacheDocumentAttributeValues(Attributed values) {
+		if (values == null)
+			return;
 		for (int f = 0; f < documentDataFields.length; f++)
 			this.cacheDocumentAttributeValue(documentDataFields[f], ((String) values.getAttribute(documentDataFields[f])));
 		for (int f = 0; f < documentDataFieldsAdmin.length; f++)
@@ -193,6 +195,8 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 			as.remove(fieldValue);
 	}
 	private void uncacheDocumentAttributeValues(Attributed values) {
+		if (values == null)
+			return;
 		for (int f = 0; f < documentDataFields.length; f++)
 			this.uncacheDocumentAttributeValue(documentDataFields[f], ((String) values.getAttribute(documentDataFields[f])));
 		for (int f = 0; f < documentDataFieldsAdmin.length; f++)

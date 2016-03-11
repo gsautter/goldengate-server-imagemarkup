@@ -34,6 +34,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.reflect.Method;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
@@ -50,8 +51,11 @@ import de.uka.ipd.idaho.gamta.util.GamtaClassLoader.ComponentInitializer;
 import de.uka.ipd.idaho.goldenGateServer.AbstractGoldenGateServerComponent;
 import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateIMS;
 import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateIMS.ImsDocumentData;
+import de.uka.ipd.idaho.goldenGateServer.util.BufferedLineInputStream;
+import de.uka.ipd.idaho.goldenGateServer.util.BufferedLineOutputStream;
 import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.util.ImDocumentData;
+import de.uka.ipd.idaho.im.util.ImDocumentData.DataHashOutputStream;
 import de.uka.ipd.idaho.im.util.ImDocumentData.ImDocumentEntry;
 
 /**
@@ -62,7 +66,7 @@ import de.uka.ipd.idaho.im.util.ImDocumentData.ImDocumentEntry;
  * 
  * @author sautter
  */
-public class GoldenGateIMI extends AbstractGoldenGateServerComponent {
+public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements GoldenGateImiConstants {
 	
 	/**
 	 * A single import task, consisting of a source of document data, the MIME
@@ -300,6 +304,22 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent {
 			cacheFolderName = cacheFolderName.substring("./".length());
 		this.cacheFolder = (((cacheFolderName.indexOf(":\\") == -1) && (cacheFolderName.indexOf(":/") == -1) && !cacheFolderName.startsWith("/")) ? new File(this.dataPath, cacheFolderName) : new File(cacheFolderName));
 		this.cacheFolder.mkdirs();
+		
+		/* TODO keep database of imported documents, including
+		 * - document ID
+		 * - upload time
+		 * - upload user
+		 * - MIME type
+		 * - document name
+		 * - import status
+		 * - last update time
+		 * - last update user (or pseudo user)
+		 * - status (import pending, import error (download error, decoding error, unknown MIME type), imported, other (processed further, etc.))
+		 */
+		
+		//	TODO allow users to see status of "their" documents
+		
+		//	TODO offer re-triggering non-completed imports (we might have a new decoder, or one with a former error fixed, etc.)
 	}
 	
 	/* (non-Javadoc)
@@ -446,6 +466,145 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent {
 		};
 		cal.add(ca);
 		
+		//	document upload request
+		ca = new ComponentActionNetwork() {
+			public String getActionCommand() {
+				return UPLOAD_DOCUMENT;
+			}
+			public void performActionNetwork(BufferedLineInputStream input, final BufferedLineOutputStream output) throws IOException {
+				
+				//	refuse proxied uploads
+				if (host.isRequestProxied()) {
+					output.write("Proxied requests are not allowed");
+					output.newLine();
+					return;
+				}
+				
+				//	read upload ID (makes for good cache file name)
+				final String uploadId = input.readLine();
+				
+				//	read and check MIME type
+				String mimeType = input.readLine();
+				if (mimeType.indexOf('/') == -1) {
+					output.write("Invalid MIME type '" + mimeType + "'");
+					output.newLine();
+					return;
+				}
+				System.out.println("Got MIME type: " + mimeType);
+				
+				//	read data name
+				final String docDataName = input.readLine();
+				if (docDataName.length() == -1) {
+					output.write("Invalid document data name '" + docDataName + "'");
+					output.newLine();
+					return;
+				}
+				System.out.println("Got document name: " + docDataName);
+				
+				//	read data name
+				final int docDataSize = Integer.parseInt(input.readLine());
+				System.out.println("Got document size: " + docDataSize);
+				
+				//	read user name
+				String user = input.readLine();
+				if (user.length() == 0)
+					user = defaultImportUserName;
+				System.out.println("Got user: " + user);
+				
+				//	read meta data (via string reading methods)
+				Attributed docAttributes = new AbstractAttributed();
+				for (String dal; (dal = input.readLine()) != null;) {
+					
+					//	separator between attributes and binary data
+					if (dal.length() == 0)
+						break;
+					
+					//	invalid line
+					if (dal.indexOf('=') == -1)
+						continue;
+					
+					//	separate attribute name from value
+					String an = dal.substring(0, dal.indexOf('='));
+					String av = dal.substring(dal.indexOf('=') + "=".length());
+					
+					//	store attribute
+					docAttributes.setAttribute(an, av);
+					System.out.println("Attribute '" + an + "' set to '" + av + "'");
+				}
+				
+				//	add user name to attributes
+				if (user != defaultImportUserName)
+					docAttributes.setAttribute(GoldenGateIMS.CHECKIN_USER_ATTRIBUTE, user);
+				
+				//	read and cache binary data, computing hash along the way
+				File docCacheFile = new File(cacheFolder, ("data." + uploadId + ".cached"));
+				OutputStream docCacheFileOut = new BufferedOutputStream(new FileOutputStream(docCacheFile));
+				DataHashOutputStream docCacheOut = new DataHashOutputStream(docCacheFileOut);
+				byte[] buffer = new byte[1024];
+				int docCacheBytes = 0;
+				for (int r; (r = input.read(buffer, 0, buffer.length)) != -1;) {
+					docCacheOut.write(buffer, 0, r);
+					docCacheBytes += r;
+					if (docCacheBytes >= docDataSize)
+						break;
+				}
+				docCacheOut.flush();
+				docCacheOut.close();
+				System.out.println("Got " + docCacheBytes + " bytes of data");
+				
+				//	compute MD5 hash document ID
+				String docId = docCacheOut.getDataHash();
+				System.out.println("Document UUID computed: " + docId);
+				
+				//	check if document already in database, and report back if so
+				Attributed exDocAttributes = null;
+				try {
+					exDocAttributes = ims.getDocumentAttributes(docId);
+				} catch (Exception e) {}
+				
+				//	schedule import if not imported before
+				String docStatus;
+				if (exDocAttributes == null) {
+					scheduleImport(mimeType, docCacheFile, true, docAttributes);
+					docStatus = "Scheduled for import.";
+				}
+				else {
+					docAttributes = exDocAttributes;
+					docStatus = ("Previously imported by " + exDocAttributes.getAttribute(GoldenGateIMS.CHECKIN_USER_ATTRIBUTE));
+				}
+				
+				//	indicate success
+				output.writeLine(UPLOAD_DOCUMENT);
+				
+				//	report document status, as well as document ID
+				output.writeLine(GoldenGateIMS.DOCUMENT_ID_ATTRIBUTE + "=" + docId);
+				output.writeLine("status" + "=" + docStatus);
+				
+				//	send (possibly updated or pre-existing) document attributes
+				String[] docAttributeNames = docAttributes.getAttributeNames();
+				for (int a = 0; a < docAttributeNames.length; a++) {
+					Object attributeValueObj = docAttributes.getAttribute(docAttributeNames[a]);
+					if (attributeValueObj instanceof CharSequence)
+						output.writeLine(docAttributeNames[a] + "=" + attributeValueObj.toString());
+					else if (attributeValueObj instanceof Number)
+						output.writeLine(docAttributeNames[a] + "=" + attributeValueObj.toString());
+					else if (attributeValueObj instanceof Boolean)
+						output.writeLine(docAttributeNames[a] + "=" + attributeValueObj.toString());
+					else if (attributeValueObj == null) {}
+					else try {
+						Method toString = attributeValueObj.getClass().getMethod("toString", ((Class) null));
+						if (!toString.getDeclaringClass().equals(Object.class))
+							output.writeLine(docAttributeNames[a] + "=" + attributeValueObj.toString());
+					} catch (Exception e) {}
+				}
+				
+				//	finally ...
+				output.flush();
+				output.close();
+			}
+		};
+		cal.add(ca);
+		
 		//	reload importers
 		ca = new ComponentActionConsole() {
 			public String getActionCommand() {
@@ -478,7 +637,21 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent {
 	 */
 	public void scheduleImport(String mimeType, URL url, Attributed attributes) {
 		ImiDocumentImport idi = new ImiDocumentImport(mimeType, url);
-		idi.setAttribute(ImDocument.DOCUMENT_SOURCE_LINK_ATTRIBUTE, url.toString());
+		
+		String urlString = url.toString();
+		idi.setAttribute(ImDocument.DOCUMENT_SOURCE_LINK_ATTRIBUTE, urlString);
+		
+		urlString = urlString.substring(urlString.lastIndexOf('/') + "/".length());
+		if (urlString.indexOf('.') == -1) {}
+		else if (urlString.toLowerCase().endsWith(".html")) {}
+		else if (urlString.toLowerCase().endsWith(".htm")) {}
+		else if (urlString.toLowerCase().endsWith(".shtml")) {}
+		else if (urlString.toLowerCase().endsWith(".shtm")) {}
+		else if (urlString.toLowerCase().endsWith(".xhtml")) {}
+		else if (urlString.toLowerCase().endsWith(".xhtm")) {}
+		else if (urlString.toLowerCase().endsWith(".xml")) {}
+		else idi.setAttribute(DOCUMENT_NAME_ATTRIBUTE, urlString);
+		
 		if (attributes != null)
 			AttributeUtils.copyAttributes(attributes, idi);
 		this.enqueueImport(idi);
@@ -499,9 +672,22 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent {
 	 * @param mimeType the MIME type of the document
 	 * @param file the file to import from
 	 * @param attributes additional document attributes
+	 * @param deleteFile delete the cache file after import?
 	 */
 	public void scheduleImport(String mimeType, File file, boolean deleteFile, Attributed attributes) {
 		ImiDocumentImport idi = new ImiDocumentImport(mimeType, file, deleteFile);
+		
+		String fileName = file.getName();
+		if (fileName.indexOf('.') == -1) {}
+		else if (fileName.toLowerCase().endsWith(".html")) {}
+		else if (fileName.toLowerCase().endsWith(".htm")) {}
+		else if (fileName.toLowerCase().endsWith(".shtml")) {}
+		else if (fileName.toLowerCase().endsWith(".shtm")) {}
+		else if (fileName.toLowerCase().endsWith(".xhtml")) {}
+		else if (fileName.toLowerCase().endsWith(".xhtm")) {}
+		else if (fileName.toLowerCase().endsWith(".xml")) {}
+		else idi.setAttribute(DOCUMENT_NAME_ATTRIBUTE, fileName);
+		
 		if (attributes != null)
 			AttributeUtils.copyAttributes(attributes, idi);
 		this.enqueueImport(idi);
@@ -581,4 +767,21 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent {
 			}
 		}
 	}
+//	
+//	private static MessageDigest checksumDigester = null;
+//	private static synchronized String computeDocumentID(byte[] pdfBytes) {
+//		if (checksumDigester == null) {
+//			try {
+//				checksumDigester = MessageDigest.getInstance("MD5");
+//			}
+//			catch (NoSuchAlgorithmException nsae) {
+//				System.out.println(nsae.getClass().getName() + " (" + nsae.getMessage() + ") while creating checksum digester.");
+//				nsae.printStackTrace(System.out); // should not happen, but Java don't know ...
+//				return Gamta.getAnnotationID(); // use random value to avoid collisions
+//			}
+//		}
+//		checksumDigester.reset();
+//		checksumDigester.update(pdfBytes);
+//		return new String(RandomByteSource.getHexCode(checksumDigester.digest()));
+//	}
 }

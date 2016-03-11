@@ -478,7 +478,7 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		
 		//	clean up cache and document data
 		this.cleanupFile(cacheFolder);
-//		this.cleanupFile(docFolder); // TODO reactivate this once that sucker works
+		this.cleanupFile(docFolder);
 	}
 	
 	private void cleanupFile(File file) {
