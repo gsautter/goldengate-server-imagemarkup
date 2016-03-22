@@ -37,8 +37,6 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.StringReader;
 import java.io.Writer;
-import java.net.MalformedURLException;
-import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -54,9 +52,11 @@ import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
+import de.uka.ipd.idaho.easyIO.util.JsonParser;
 import de.uka.ipd.idaho.easyIO.web.FormDataReceiver;
 import de.uka.ipd.idaho.easyIO.web.FormDataReceiver.FieldValueInputStream;
 import de.uka.ipd.idaho.gamta.Gamta;
+import de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed;
 import de.uka.ipd.idaho.gamta.util.SgmlDocumentReader;
 import de.uka.ipd.idaho.goldenGateServer.client.GgServerHtmlServlet;
 import de.uka.ipd.idaho.htmlXmlUtil.accessories.HtmlPageBuilder;
@@ -64,6 +64,7 @@ import de.uka.ipd.idaho.plugins.bibRefs.BibRefConstants;
 import de.uka.ipd.idaho.plugins.bibRefs.BibRefEditorFormHandler;
 import de.uka.ipd.idaho.plugins.bibRefs.BibRefTypeSystem;
 import de.uka.ipd.idaho.plugins.bibRefs.BibRefUtils;
+import de.uka.ipd.idaho.plugins.bibRefs.BibRefTypeSystem.BibRefType;
 import de.uka.ipd.idaho.plugins.bibRefs.BibRefUtils.RefData;
 import de.uka.ipd.idaho.plugins.bibRefs.reFinder.ReFinderClient;
 import de.uka.ipd.idaho.plugins.bibRefs.refBank.RefBankClient;
@@ -76,7 +77,7 @@ import de.uka.ipd.idaho.plugins.bibRefs.refBank.RefBankClient.BibRefIterator;
  * @author sautter
  */
 public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements BibRefConstants {
-	private static final int uploadMaxLength = (10 * 1024 * 1024); // 10MB for starters
+	private static final int uploadMaxLength = (25 * 1024 * 1024); // 25MB for starters
 	private static Set fileFieldNames = Collections.synchronizedSet(new HashSet());
 	static {
 		fileFieldNames.add("uploadDocFile");
@@ -89,6 +90,7 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 	private Map mimeTypes = new LinkedHashMap();
 	
 	private String putPassPhrase = Gamta.getAnnotationID(); // initialize to random value to block PUT upload for faulty configuration
+	private String putMetadataWaiverMode = Gamta.getAnnotationID(); // initialize to random value to block metadata waiver for faulty configuration
 	
 	private File uploadCacheFolder = null;
 	
@@ -109,7 +111,7 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		this.uploadCacheFolder = new File(new File(this.webInfFolder, "caches"), "imsUploadData");
 		this.uploadCacheFolder.mkdirs();
 		
-		//	connect to backing BDP
+		//	connect to backing IMI
 		this.imiClient = new GoldenGateImiClient(this.serverConnection);
 	}
 	
@@ -122,14 +124,21 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		//	read pass phrase from configuration
 		this.putPassPhrase = this.getSetting("putPassPhrase", this.putPassPhrase);
 		
+		//	read metadata check waiver from configuration
+		this.putMetadataWaiverMode = this.getSetting("putMetadataWaiverMode", this.putMetadataWaiverMode);
+		
 		//	collect identifier types
-		ArrayList idTypes = new ArrayList();
-		idTypes.add("Generic");
-		idTypes.addAll(Arrays.asList(this.getSetting("refIdTypes", "").trim().split("\\s+")));
-		this.refIdTypes = ((String[]) idTypes.toArray(new String[idTypes.size()]));
+		String refIdTypesSetting = this.getSetting("refIdTypes", "none Generic");
+		ArrayList refIdTypes = new ArrayList();
+		if (refIdTypesSetting.toLowerCase().startsWith("none ")) {
+			refIdTypes.add("");
+			refIdTypesSetting = refIdTypesSetting.substring("none ".length());
+		}
+		refIdTypes.addAll(Arrays.asList(refIdTypesSetting.trim().split("\\s+")));
+		this.refIdTypes = ((String[]) refIdTypes.toArray(new String[refIdTypes.size()]));
 		StringBuffer refIdTypesString = new StringBuffer();
-		for (int i = 1; i < this.refIdTypes.length; i++) {
-			if (i != 1)
+		for (int i = 0; i < this.refIdTypes.length; i++) {
+			if (i != 0)
 				refIdTypesString.append(';');
 			refIdTypesString.append(this.refIdTypes[i]);
 		}
@@ -179,9 +188,12 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		
 		//	check authentication
 		if (!this.webAppHost.isAuthenticated(request)) {
-			//	TODO use form passe-partout as described above
-			//	TODO style login page
-			this.sendHtmlPage(this.webAppHost.getLoginPageBuilder(this, request, response, "includeBody", null));
+			StringBuffer loginForwardUrl = new StringBuffer(request.getContextPath() + request.getServletPath());
+			if (request.getPathInfo() != null)
+				loginForwardUrl.append(request.getPathInfo());
+			if (request.getQueryString() != null)
+				loginForwardUrl.append("?" + request.getQueryString());
+			this.sendHtmlPage(this.webAppHost.getLoginPageBuilder(this, request, response, "includeBody", loginForwardUrl.toString()));
 			return;
 		}
 		
@@ -270,11 +282,7 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		this.sendHtmlPage(new HtmlPageBuilder(this, request, response) {
 			protected void include(String type, String tag) throws IOException {
 				if ("includeBody".equals(type)) {
-					//	TODO make sure this sucker is a child of the page body proper, or at least increase z-index
 					webAppHost.writeAccountManagerHtml(this, null);
-					//	TODO make sure this sucker is properly wrapped in the required DIV container
-					//	TODO likely use sort of a 'formHost.html' file as sort of a passe-partout to do so ...
-					//	TODO ... and switch form-building servlets to react to 'includeForm' tag inside it 
 					writeUploadForm(this, null);
 				}
 				else super.include(type, tag);
@@ -286,7 +294,6 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 	}
 	
 	private void writeUploadForm(HtmlPageBuilder hpb, String forwardUrl) throws IOException {
-		 // TODO style upload form
 		
 		//	generate upload ID
 		String uploadId = Gamta.getAnnotationID();
@@ -345,6 +352,9 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		hpb.writeLine("</table>");
 		hpb.writeLine("</div>");
 		
+		//	TODO include document license selector ==> get advice from Donat & Willi
+		//	TODO add checkbox for consent to treatments becoming publicly accessible
+		
 		hpb.writeLine("<div id=\"imiDocUploadButtons\">");
 		hpb.writeLine("<input type=\"button\" class=\"imiDocUploadButton\" id=\"searchRefs_button\" value=\"Search References\" onclick=\"searchRefs();\">");
 		hpb.writeLine("<input type=\"button\" class=\"imiDocUploadButton\" id=\"checkRef_button\" value=\"Check Reference\" onclick=\"validateRefData();\">");
@@ -354,26 +364,49 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		hpb.writeLine("</form>");
 		
 		hpb.writeLine("<script type=\"text/javascript\">");
-		boolean setRef = false;
 		hpb.writeLine("  var ref = new Object();");
-		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, AUTHOR_ANNOTATION_TYPE));
-		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, YEAR_ANNOTATION_TYPE));
-		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, TITLE_ANNOTATION_TYPE));
-		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, JOURNAL_NAME_ANNOTATION_TYPE));
-		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, PUBLISHER_ANNOTATION_TYPE));
-		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, LOCATION_ANNOTATION_TYPE));
-		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, EDITOR_ANNOTATION_TYPE));
-		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, VOLUME_TITLE_ANNOTATION_TYPE));
-		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, PAGINATION_ANNOTATION_TYPE));
-		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, VOLUME_DESIGNATOR_ANNOTATION_TYPE));
-		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, ISSUE_DESIGNATOR_ANNOTATION_TYPE));
-		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, NUMERO_DESIGNATOR_ANNOTATION_TYPE));
-		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, PUBLICATION_URL_ANNOTATION_TYPE));
+		RefData rd = new RefData();
+		boolean setRef = false;
+		
+		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, AUTHOR_ANNOTATION_TYPE, rd));
+		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, YEAR_ANNOTATION_TYPE, rd));
+		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, TITLE_ANNOTATION_TYPE, rd));
+		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, JOURNAL_NAME_ANNOTATION_TYPE, rd));
+		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, PUBLISHER_ANNOTATION_TYPE, rd));
+		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, LOCATION_ANNOTATION_TYPE, rd));
+		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, EDITOR_ANNOTATION_TYPE, rd));
+		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, VOLUME_TITLE_ANNOTATION_TYPE, rd));
+		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, PAGINATION_ANNOTATION_TYPE, rd));
+		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, VOLUME_DESIGNATOR_ANNOTATION_TYPE, rd));
+		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, ISSUE_DESIGNATOR_ANNOTATION_TYPE, rd));
+		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, NUMERO_DESIGNATOR_ANNOTATION_TYPE, rd));
+		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, PUBLICATION_URL_ANNOTATION_TYPE, rd));
 		for (int i = 0; i < this.refIdTypes.length; i++)
-			setRef = (setRef | this.writeRefDataAttributeSetter(hpb, ("ID-" + this.refIdTypes[i])));
-		if (setRef)
+			setRef = (setRef | this.writeRefDataAttributeSetter(hpb, ("ID-" + this.refIdTypes[i]), rd));
+		
+		if (setRef) {
+			String type = this.refTypeSystem.classify(rd);
+			if (type == null) {
+				BibRefType[] refTypes = this.refTypeSystem.getBibRefTypes();
+				int bestTypeErrors = Integer.MAX_VALUE;
+				int bestTypeStrictness = 0;
+				for (int t = 0; t < refTypes.length; t++) {
+					String[] errors = refTypes[t].getErrors(rd);
+					int typeErrors = ((errors == null) ? 0 : errors.length);
+					if ((typeErrors < bestTypeErrors) || ((typeErrors == bestTypeErrors) && (refTypes[t].getMatchStrictness() > bestTypeStrictness))) {
+						type = refTypes[t].name;
+						bestTypeErrors = typeErrors;
+						bestTypeStrictness = refTypes[t].getMatchStrictness();
+					}
+				}
+			}
+			if (type != null)
+				hpb.writeLine("  ref['" + PUBLICATION_TYPE_ATTRIBUTE + "'] = '" + JsonParser.escape(type) + "';");
+			
 			hpb.writeLine("  bibRefEditor_setRef(ref);");
+		}
 		hpb.writeLine("  bibRefEditor_refTypeChanged();");
+		
 		hpb.writeLine("</script>");
 		
 		hpb.writeLine("<script id=\"refSearchScript\" type=\"text/javascript\"></script>");
@@ -382,20 +415,27 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		hpb.writeLine("</div>");
 	}
 	
-	private boolean writeRefDataAttributeSetter(HtmlPageBuilder hpb, String attribute) throws IOException {
+	private boolean writeRefDataAttributeSetter(HtmlPageBuilder hpb, String attribute, RefData rd) throws IOException {
 		String value = hpb.request.getParameter(attribute);
 		if (value == null)
 			return false;
 		value = value.trim();
 		if (value.length() == 0)
 			return false;
-		hpb.writeLine("  ref['" + attribute + "'] = '" + value + "'");
+		
+		hpb.writeLine("  ref['" + attribute + "'] = '" + JsonParser.escape(value) + "';");
+		
+		if (AUTHOR_ANNOTATION_TYPE.equals(attribute) || EDITOR_ANNOTATION_TYPE.equals(attribute)) {
+			String[] values = value.split("\\s*\\&\\s*");
+			for (int v = 0; v < values.length; v++)
+				rd.addAttribute(attribute, values[v]);
+		}
+		else rd.setAttribute(attribute, value);
+		
 		return true;
 	}
 	
 	private RefData[] searchRefData(HttpServletRequest request) throws IOException {
-//		if (this.rbkClient == null)
-//			return new RefData[0];
 		
 		//	get query data
 		String extIdType = null;
@@ -525,8 +565,6 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		
 		//	check authentication (user name & password via host, pass phrase locally)
 		if (!this.webAppHost.isAuthenticated(request)) {
-			//	TODO use form passe-partout as described above
-			//	TODO style login page
 			this.sendHtmlPage(this.webAppHost.getLoginPageBuilder(this, request, response, "includeBody", (request.getContextPath() + request.getServletPath())));
 			return;
 		}
@@ -570,46 +608,50 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 			return;
 		}
 		
+		//	wrap meta data in Properties (as 'mods:' attributes)
+		final Properties docAttributes = new Properties();
+		BibRefUtils.toModsAttributes(rd, new AbstractAttributed() {
+			public Object setAttribute(String name, Object value) {
+				if (value == null)
+					return docAttributes.remove(name);
+				else return docAttributes.setProperty(name, value.toString());
+			}
+		});
+		
+		//	TODO get document license
+		//	TODO include license in upload attributes
+		//	TODO observe license when uploading to Zenodo (once that works at all ...)
+		
+		//	invalidate upload ID
+		this.validUploadIDs.remove(uploadId);
+		
 		//	get input stream for document proper
 		InputStream docDataSource = data.getFieldByteStream("uploadDocFile");
-		String docDataName = ((docDataSource instanceof FieldValueInputStream) ? ((FieldValueInputStream) docDataSource).fileName : null);
-		int docDataSize = ((docDataSource instanceof FieldValueInputStream) ? ((FieldValueInputStream) docDataSource).fieldLength : -1);
+		if ((docDataSource instanceof FieldValueInputStream) && (((FieldValueInputStream) docDataSource).fieldLength != 0)) {}
+		else docDataSource = null;
 		
-		//	try and use document URL if no file uploaded
+		//	prepare upload result
+		final Properties uDocAttributes;
+		
+		//	do URL upload
 		if (docDataSource == null) {
 			String docDataUrl = data.getFieldValue("uploadDocUrl");
 			if (docDataUrl == null) {
 				response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Neither file nor URL specified.");
 				return;
 			}
-			else try {
-				docDataSource = (new URL(docDataUrl)).openStream();
-				docDataName = docDataUrl.substring(docDataUrl.lastIndexOf('/') + "/".length());
-			}
-			catch (MalformedURLException mue) {
-				response.sendError(HttpServletResponse.SC_BAD_REQUEST, ("Invalid document URL: " + docDataUrl));
-				return;
-			}
-			catch (IOException ioe) {
-				response.sendError(HttpServletResponse.SC_BAD_REQUEST, ("Invalid document URL: " + docDataUrl));
-				return;
-			}
+			uDocAttributes = this.imiClient.uploadDocument(docDataUrl, mimeType, docAttributes, user);
 		}
 		
-		//	invalidate upload ID
-		this.validUploadIDs.remove(uploadId);
+		//	do file upload
+		else {
+			String docDataName = ((docDataSource instanceof FieldValueInputStream) ? ((FieldValueInputStream) docDataSource).fileName : null);
+			int docDataSize = ((docDataSource instanceof FieldValueInputStream) ? ((FieldValueInputStream) docDataSource).fieldLength : -1);
+			uDocAttributes = this.imiClient.uploadDocument(docDataSource, docDataSize, docDataName, mimeType, docAttributes, user);
+		}
 		
-		//	wrap meta data in Properties
-		Properties docAttributes = new Properties();
-		String[] rdAns = rd.getAttributeNames();
-		for (int n = 0; n < rdAns.length; n++)
-			docAttributes.setProperty(rdAns[n], rd.getAttributeValueString(rdAns[n], "&"));
-		String[] rdIts = rd.getIdentifierTypes();
-		for (int t = 0; t < rdIts.length; t++)
-			docAttributes.setProperty(("ID-" + rdIts[t]), rd.getIdentifier(rdIts[t]));
-		
-		//	send upload to backing BDP
-		final Properties uDocAttributes = this.imiClient.uploadDocument(docDataSource, uploadId, docDataName, docDataSize, mimeType, docAttributes, user);
+		//	TODO send back a nice 'thank you for your contribution' page
+		//	TODO make this page configurable (we don't want Plazi specific stuff in this very GIT project)
 		
 		//	send upload log array and updated document attributes
 		response.setCharacterEncoding("UTF-8");
@@ -645,6 +687,9 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 			return;
 		}
 		
+		//	check metadata waiver header
+		String metaDataMode = request.getHeader("Meta-Data-Mode");
+		
 		//	receive upload
 		FormDataReceiver data = FormDataReceiver.receive(request, uploadMaxLength, this.uploadCacheFolder, 1024, fileFieldNames);
 		
@@ -662,12 +707,14 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 			return;
 		}
 		
-		//	check meta data
+		//	get meta data, and check it if not explicitly told not to
 		RefData rd = this.getRefData(data);
-		String[] rdErrors = this.refTypeSystem.checkType(rd);
-		if (rdErrors != null) {
-			response.sendError(HttpServletResponse.SC_BAD_REQUEST, ("Invalid bibliographic meta data: " + rdErrors[0]));
-			return;
+		if ((metaDataMode == null) || !this.putMetadataWaiverMode.equals(metaDataMode)) {
+			String[] rdErrors = this.refTypeSystem.checkType(rd);
+			if (rdErrors != null) {
+				response.sendError(HttpServletResponse.SC_BAD_REQUEST, ("Invalid bibliographic meta data: " + rdErrors[0]));
+				return;
+			}
 		}
 		
 		//	wrap meta data in Properties
@@ -683,7 +730,7 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		FieldValueInputStream docDataSource = data.getFieldByteStream("file");
 		
 		//	send upload to backing BDP
-		Properties uDocAttributes = this.imiClient.uploadDocument(docDataSource, Gamta.getAnnotationID(), docDataSource.fileName, docDataSource.fieldLength, mimeType, docAttributes, user);
+		Properties uDocAttributes = this.imiClient.uploadDocument(docDataSource, docDataSource.fieldLength, docDataSource.fileName, mimeType, docAttributes, user);
 		
 		//	send JSON object with upload log array and updated document attributes
 		response.setCharacterEncoding("UTF-8");
@@ -721,10 +768,10 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		out.writeLine("<script type=\"text/javascript\">");
 		
 		out.writeLine("function uploadFileChanged() {");
-		out.writeLine("  var uff = $('uploadFile_field');");
+		out.writeLine("  var uff = getById('uploadFile_field');");
 		out.writeLine("  if ((uff.value == null) || (uff.value.length == 0))");
 		out.writeLine("    return;");
-		out.writeLine("  var uuf = $('uploadUrl_field');");
+		out.writeLine("  var uuf = getById('uploadUrl_field');");
 		out.writeLine("  uuf.value = '';");
 		out.writeLine("}");
 		
@@ -747,18 +794,23 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		out.writeLine("  refJsp.appendChild(refJs);");
 		out.writeLine("}");
 		out.writeLine("function clearSearchResult() {");
-		out.writeLine("  var srd = $('refSearchResult');");
+		out.writeLine("  var srd = getById('refSearchResult');");
 		out.writeLine("  while (srd.firstChild)");
 		out.writeLine("    srd.removeChild(srd.firstChild);");
 		out.writeLine("  srd.style.display = 'none';");
 		out.writeLine("}");
 		out.writeLine("function displaySearchResult(refs) {");
 		out.writeLine("  clearSearchResult();");
-		out.writeLine("  var srd = $('refSearchResult');");
+		out.writeLine("  var srd = getById('refSearchResult');");
 		out.writeLine("  if (refs.length == 0)");
 		out.writeLine("    srd.appendChild(newElement('p', null, 'refSearchResultElement', 'Your search did not return any references.'));");
 		out.writeLine("  else for (var r = 0; r < refs.length; r++)");
 		out.writeLine("    displaySearchResultRef(srd, refs[r]);");
+		out.writeLine("  var cb = newElement('button', null, 'refSearchResultClose', 'Close');");
+		out.writeLine("  cb.onclick = function() {");
+		out.writeLine("    clearSearchResult();");
+		out.writeLine("  }");
+		out.writeLine("  srd.appendChild(cb);");
 		out.writeLine("  srd.style.display = null;");
 		out.writeLine("}");
 		out.writeLine("function displaySearchResultRef(srd, ref) {");
@@ -787,13 +839,13 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		out.writeLine("    }");
 		out.writeLine("  bibRefEditor_setRef(ref);");
 		out.writeLine("  if (ref['" + PUBLICATION_URL_ANNOTATION_TYPE + "']) {");
-		out.writeLine("    var uuf = $('uploadUrl_field');");
-		out.writeLine("    var uff = $('uploadFile_field');");
+		out.writeLine("    var uuf = getById('uploadUrl_field');");
+		out.writeLine("    var uff = getById('uploadFile_field');");
 		out.writeLine("    if ((uuf != null) && ((uff == null) || (uff.value == null) || (uff.value == '')))");
 		out.writeLine("      uuf.value = ref['" + PUBLICATION_URL_ANNOTATION_TYPE + "'];");
 		out.writeLine("  }");
 		out.writeLine("  if (ref['docFormat']) {");
-		out.writeLine("    var udff = $('uploadDocFormat_field');");
+		out.writeLine("    var udff = getById('uploadDocFormat_field');");
 		out.writeLine("    if (udff != null)");
 		out.writeLine("      udff.value = ref['docFormat'];");
 		out.writeLine("  }");
@@ -840,16 +892,16 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		out.writeLine("    alert(em);");
 		out.writeLine("    return false;");
 		out.writeLine("  }");
-		out.writeLine("  var uf = $('uploadForm');");
+		out.writeLine("  var uf = getById('uploadForm');");
 		out.writeLine("  if (uf == null)");
 		out.writeLine("    return false;");
-		out.writeLine("  var uuf = $('uploadUrl_field');");
+		out.writeLine("  var uuf = getById('uploadUrl_field');");
 		out.writeLine("  var uploadUrl = ((uuf == null) ? '' : uuf.value);");
 		out.writeLine("  if (uploadUrl != '') {");
 		out.writeLine("    uf.enctype = 'application/x-www-form-urlencoded';");
 		out.writeLine("    return true;");
 		out.writeLine("  }");
-		out.writeLine("  var uff = $('uploadFile_field');");
+		out.writeLine("  var uff = getById('uploadFile_field');");
 		out.writeLine("  var uploadFile = ((uff == null) ? '' : uff.value);");
 		out.writeLine("  if (uploadFile != '') {");
 		out.writeLine("    uf.enctype = 'multipart/form-data';");

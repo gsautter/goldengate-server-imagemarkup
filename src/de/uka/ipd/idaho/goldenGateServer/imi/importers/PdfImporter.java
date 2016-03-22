@@ -98,6 +98,7 @@ public class PdfImporter extends ImiDocumentImporter {
 		
 		//	install image markup and OCR JARs
 		this.installJar("ImageMarkup.jar");
+		this.installJar("ImageMarkup.bin.jar");
 		this.installJar("ImageMarkupOCR.jar");
 		this.installJar("ImageMarkupOCR.bin.jar");
 		

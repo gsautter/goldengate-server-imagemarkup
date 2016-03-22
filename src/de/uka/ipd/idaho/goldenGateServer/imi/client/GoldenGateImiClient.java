@@ -57,17 +57,35 @@ public class GoldenGateImiClient implements GoldenGateImiConstants {
 	}
 	
 	/**
-	 * Upload a document to the backing IMI.
-	 * @param docDataSource an input stream providing the actual document data
+	 * Upload a document URL to the backing IMI.
+	 * @param docDataUrl the URL to load the document data from
 	 * @param docDataName an name of the document source, e.g. a file name
-	 * @param docDataSize an size of the document source in bytes
 	 * @param mimeType the MIME type of the document
 	 * @param docAttributes additional attributes to the document
 	 * @param user the user to credit for the upload
 	 * @return a properties object holding the upload attributes
 	 * @throws IOException
 	 */
-	public Properties uploadDocument(InputStream docDataSource, String uploadId, String docDataName, int docDataSize, String mimeType, Properties docAttributes, String user) throws IOException {
+	public Properties uploadDocument(String docDataUrl, String mimeType, Properties docAttributes, String user) throws IOException {
+		return this.uploadDocument(null, -1, null, docDataUrl, mimeType, docAttributes, user);
+	}
+	
+	/**
+	 * Upload a document to the backing IMI.
+	 * @param docDataSource an input stream providing the actual document data
+	 * @param docDataSize an size of the document source in bytes
+	 * @param docDataName an name of the document source, e.g. a file name
+	 * @param mimeType the MIME type of the document
+	 * @param docAttributes additional attributes to the document
+	 * @param user the user to credit for the upload
+	 * @return a properties object holding the upload attributes
+	 * @throws IOException
+	 */
+	public Properties uploadDocument(InputStream docDataSource, int docDataSize, String docDataName, String mimeType, Properties docAttributes, String user) throws IOException {
+		return this.uploadDocument(docDataSource, docDataSize, docDataName, null, mimeType, docAttributes, user);
+	}
+	
+	private Properties uploadDocument(InputStream docDataSource, int docDataSize, String docDataName, String docDataUrl, String mimeType, Properties docAttributes, String user) throws IOException {
 		Connection con = this.serverConnection.getConnection();
 		try {
 			BufferedLineOutputStream out = con.getOutputStream();
@@ -75,20 +93,17 @@ public class GoldenGateImiClient implements GoldenGateImiConstants {
 			//	write command
 			out.writeLine(UPLOAD_DOCUMENT);
 			
-			//	send upload ID (makes for good cache file name)
-			out.writeLine(uploadId);
+			//	send user name
+			out.writeLine((user == null) ? "" : user);
 			
 			//	send MIME type
 			out.writeLine(mimeType);
 			
 			//	send file name
-			out.writeLine(docDataName);
-			
-			//	send file name
 			out.writeLine("" + docDataSize);
 			
-			//	send user name
-			out.writeLine((user == null) ? "" : user);
+			//	send file name or URL
+			out.writeLine((docDataSize < 0) ? docDataUrl : docDataName);
 			
 			//	send attributes (watch line breaks)
 			for (Enumeration ane = docAttributes.propertyNames(); ane.hasMoreElements();) {
@@ -101,10 +116,14 @@ public class GoldenGateImiClient implements GoldenGateImiConstants {
 			//	send separator line
 			out.newLine();
 			
-			//	send document data
-			byte[] buffer = new byte[1024];
-			for (int r; (r = docDataSource.read(buffer, 0, buffer.length)) != -1;)
-				out.write(buffer, 0, r);
+			//	send document data if in file mode
+			if (docDataSize >= 0) {
+				byte[] buffer = new byte[1024];
+				for (int r; (r = docDataSource.read(buffer, 0, buffer.length)) != -1;)
+					out.write(buffer, 0, r);
+			}
+			
+			//	send data
 			out.flush();
 			
 			//	read response / error message
@@ -126,7 +145,6 @@ public class GoldenGateImiClient implements GoldenGateImiConstants {
 					return this.keys.elements();
 				}
 			};
-			uDocAttributes.putAll(docAttributes);
 			for (String dal; (dal = br.readLine()) != null;) {
 				
 				//	invalid line

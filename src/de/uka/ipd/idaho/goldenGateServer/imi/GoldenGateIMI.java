@@ -45,6 +45,7 @@ import java.util.LinkedList;
 
 import de.uka.ipd.idaho.gamta.AttributeUtils;
 import de.uka.ipd.idaho.gamta.Attributed;
+import de.uka.ipd.idaho.gamta.Gamta;
 import de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed;
 import de.uka.ipd.idaho.gamta.util.GamtaClassLoader;
 import de.uka.ipd.idaho.gamta.util.GamtaClassLoader.ComponentInitializer;
@@ -475,41 +476,35 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 				
 				//	refuse proxied uploads
 				if (host.isRequestProxied()) {
-					output.write("Proxied requests are not allowed");
-					output.newLine();
+					output.writeLine("Proxied requests are not allowed");
 					return;
 				}
-				
-				//	read upload ID (makes for good cache file name)
-				final String uploadId = input.readLine();
-				
-				//	read and check MIME type
-				String mimeType = input.readLine();
-				if (mimeType.indexOf('/') == -1) {
-					output.write("Invalid MIME type '" + mimeType + "'");
-					output.newLine();
-					return;
-				}
-				System.out.println("Got MIME type: " + mimeType);
-				
-				//	read data name
-				final String docDataName = input.readLine();
-				if (docDataName.length() == -1) {
-					output.write("Invalid document data name '" + docDataName + "'");
-					output.newLine();
-					return;
-				}
-				System.out.println("Got document name: " + docDataName);
-				
-				//	read data name
-				final int docDataSize = Integer.parseInt(input.readLine());
-				System.out.println("Got document size: " + docDataSize);
 				
 				//	read user name
 				String user = input.readLine();
 				if (user.length() == 0)
 					user = defaultImportUserName;
 				System.out.println("Got user: " + user);
+				
+				//	read and check MIME type
+				String mimeType = input.readLine();
+				if (mimeType.indexOf('/') == -1) {
+					output.writeLine("Invalid MIME type '" + mimeType + "'");
+					return;
+				}
+				System.out.println("Got MIME type: " + mimeType);
+				
+				//	read data name
+				final int docDataSize = Integer.parseInt(input.readLine());
+				System.out.println("Got document size: " + docDataSize);
+				
+				//	read data name
+				final String docDataNameOrUrl = input.readLine();
+				if (docDataNameOrUrl.length() == 0) {
+					output.writeLine("Invalid document data " + ((docDataSize < 0) ? "URL" : "name") + " '" + docDataNameOrUrl + "'");
+					return;
+				}
+				System.out.println("Got document " + ((docDataSize < 0) ? "URL" : "name") + ": " + docDataNameOrUrl);
 				
 				//	read meta data (via string reading methods)
 				Attributed docAttributes = new AbstractAttributed();
@@ -536,48 +531,71 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 				if (user != defaultImportUserName)
 					docAttributes.setAttribute(GoldenGateIMS.CHECKIN_USER_ATTRIBUTE, user);
 				
-				//	read and cache binary data, computing hash along the way
-				File docCacheFile = new File(cacheFolder, ("data." + uploadId + ".cached"));
-				OutputStream docCacheFileOut = new BufferedOutputStream(new FileOutputStream(docCacheFile));
-				DataHashOutputStream docCacheOut = new DataHashOutputStream(docCacheFileOut);
-				byte[] buffer = new byte[1024];
-				int docCacheBytes = 0;
-				for (int r; (r = input.read(buffer, 0, buffer.length)) != -1;) {
-					docCacheOut.write(buffer, 0, r);
-					docCacheBytes += r;
-					if (docCacheBytes >= docDataSize)
-						break;
-				}
-				docCacheOut.flush();
-				docCacheOut.close();
-				System.out.println("Got " + docCacheBytes + " bytes of data");
-				
-				//	compute MD5 hash document ID
-				String docId = docCacheOut.getDataHash();
-				System.out.println("Document UUID computed: " + docId);
-				
-				//	check if document already in database, and report back if so
-				Attributed exDocAttributes = null;
-				try {
-					exDocAttributes = ims.getDocumentAttributes(docId);
-				} catch (Exception e) {}
-				
-				//	schedule import if not imported before
+				//	prepare handling upload
+				String docId;
 				String docStatus;
-				if (exDocAttributes == null) {
-					scheduleImport(mimeType, docCacheFile, true, docAttributes);
-					docStatus = "Scheduled for import.";
+				
+				//	receive and handle URL upload
+				if (docDataSize < 0) {
+					URL docDataUrl;
+					try {
+						docDataUrl = new URL(docDataNameOrUrl);
+					}
+					catch (Exception e) {
+						output.writeLine("Invalid document data URL '" + docDataNameOrUrl + "'");
+						return;
+					}
+					scheduleImport(mimeType, docDataUrl, docAttributes);
+					docId = null;
+					docStatus = "Scheduled for download and import.";
 				}
+				
+				//	receive and handle file upload
 				else {
-					docAttributes = exDocAttributes;
-					docStatus = ("Previously imported by " + exDocAttributes.getAttribute(GoldenGateIMS.CHECKIN_USER_ATTRIBUTE));
+					
+					//	read and cache binary data, computing hash along the way
+					File docCacheFile = new File(cacheFolder, ("data." + Gamta.getAnnotationID() + ".cached"));
+					OutputStream docCacheFileOut = new BufferedOutputStream(new FileOutputStream(docCacheFile));
+					DataHashOutputStream docCacheOut = new DataHashOutputStream(docCacheFileOut);
+					byte[] buffer = new byte[1024];
+					int docCacheBytes = 0;
+					for (int r; (r = input.read(buffer, 0, buffer.length)) != -1;) {
+						docCacheOut.write(buffer, 0, r);
+						docCacheBytes += r;
+						if (docCacheBytes >= docDataSize)
+							break;
+					}
+					docCacheOut.flush();
+					docCacheOut.close();
+					System.out.println("Got " + docCacheBytes + " bytes of data");
+					
+					//	compute MD5 hash document ID
+					docId = docCacheOut.getDataHash();
+					System.out.println("Document UUID computed: " + docId);
+					
+					//	check if document already in database, and report back if so
+					Attributed exDocAttributes = null;
+					try {
+						exDocAttributes = ims.getDocumentAttributes(docId);
+					} catch (Exception e) {}
+					
+					//	schedule import if not imported before
+					if (exDocAttributes == null) {
+						scheduleImport(mimeType, docCacheFile, true, docAttributes);
+						docStatus = "Scheduled for import.";
+					}
+					else {
+						docAttributes = exDocAttributes;
+						docStatus = ("Previously imported by " + exDocAttributes.getAttribute(GoldenGateIMS.CHECKIN_USER_ATTRIBUTE));
+					}
 				}
 				
 				//	indicate success
 				output.writeLine(UPLOAD_DOCUMENT);
 				
 				//	report document status, as well as document ID
-				output.writeLine(GoldenGateIMS.DOCUMENT_ID_ATTRIBUTE + "=" + docId);
+				if (docId != null)
+					output.writeLine(GoldenGateIMS.DOCUMENT_ID_ATTRIBUTE + "=" + docId);
 				output.writeLine("status" + "=" + docStatus);
 				
 				//	send (possibly updated or pre-existing) document attributes
