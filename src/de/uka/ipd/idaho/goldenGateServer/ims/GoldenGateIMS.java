@@ -1817,12 +1817,13 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		
 		//	mark document as checked out
 		long checkoutTime = System.currentTimeMillis();
-		this.setCheckoutUser(documentId, userName, checkoutTime);
+		if (!this.setCheckoutUser(documentId, userName, checkoutTime))
+			throw new IOException("Could not acquire checkout lock on document '" + documentId + "'.");
 		
 		//	get document data
 		ImsDocumentData docData = this.getDocumentData(documentId, false, false);
 		if (docData == null)
-			throw new IOException("Invalid document ID '" + documentId + "'");
+			throw new IOException("Invalid document ID '" + documentId + "'.");
 		
 		//	get entry list for argument version
 		docData = docData.cloneForVersion(version);
@@ -1845,8 +1846,21 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	
 	private boolean mayUpdateDocument(String userName, String docId) {
 		String checkoutUser = this.getCheckoutUser(docId);
-		if (checkoutUser == null) return true; // document not known so far
-		else return checkoutUser.equals(userName); // document checked out by user in question
+		
+		//	document not known so far
+		if (checkoutUser == null)
+			return true;
+		
+		//	document checked out by user in question
+		if (checkoutUser.equals(userName))
+			return true;
+		
+		//	document checked out by other user
+		if (!"".equals(checkoutUser))
+			return false;
+		
+		//	try and check out document for current user
+		return this.setCheckoutUser(docId, userName, System.currentTimeMillis());
 	}
 
 	/**
@@ -1891,17 +1905,18 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		
 		// do cache lookup
 		String checkoutUser = ((String) this.checkoutUserCache.get(docId));
-
+		
 		// cache hit
-		if (checkoutUser != null) return checkoutUser;
-
+		if (checkoutUser != null)
+			return checkoutUser;
+		
 		// cache miss, prepare loading data
 		String query = "SELECT " + CHECKOUT_USER_ATTRIBUTE + 
 				" FROM " + DOCUMENT_TABLE_NAME + 
 				" WHERE " + DOCUMENT_ID_ATTRIBUTE + " LIKE '" + EasyIO.sqlEscape(docId) + "'" +
 				" AND " + DOCUMENT_ID_HASH_ATTRIBUTE + " = " + docId.hashCode() +
 				";";
-
+		
 		SqlQueryResult sqr = null;
 		try {
 			sqr = this.io.executeSelectQuery(query);
@@ -1920,7 +1935,8 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 			return null;
 		}
 		finally {
-			if (sqr != null) sqr.close();
+			if (sqr != null)
+				sqr.close();
 		}
 	}
 	
@@ -2012,7 +2028,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		}
 	};
 	
-	private void setCheckoutUser(String docId, String checkoutUser, long checkoutTime) {
+	private boolean setCheckoutUser(String docId, String checkoutUser, long checkoutTime) {
 		StringVector assignments = new StringVector();
 
 		// set checkout user
@@ -2033,10 +2049,12 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		try {
 			this.io.executeUpdateQuery(updateQuery);
 			this.checkoutUserCache.put(docId, checkoutUser);
+			return true;
 		}
 		catch (SQLException sqle) {
 			System.out.println("GoldenGateIMS: " + sqle.getClass().getName() + " (" + sqle.getMessage() + ") while setting checkout user for document " + docId + ".");
 			System.out.println("  query was " + updateQuery);
+			return false;
 		}
 	}
 
