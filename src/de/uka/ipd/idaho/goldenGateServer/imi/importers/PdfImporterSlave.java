@@ -358,13 +358,19 @@ public class PdfImporterSlave {
 			
 			//	replace supplement with disc based one
 			if (ims instanceof ImSupplement.Figure)
-				return new ImSupplement.Figure(this, ims.getMimeType(), ((ImSupplement.Figure) ims).getPageId(), ((ImSupplement.Figure) ims).getDpi(), ((ImSupplement.Figure) ims).getBounds()) {
+				return new ImSupplement.Figure(this, ims.getMimeType(), ((ImSupplement.Figure) ims).getPageId(), ((ImSupplement.Figure) ims).getRenderOrderNumber(), ((ImSupplement.Figure) ims).getDpi(), ((ImSupplement.Figure) ims).getBounds()) {
+					public InputStream getInputStream() throws IOException {
+						return new BufferedInputStream(new FileInputStream(sFile));
+					}
+				};
+			else if (ims instanceof ImSupplement.Graphics)
+				return new ImSupplement.Graphics(this, ((ImSupplement.Graphics) ims).getPageId(), ((ImSupplement.Graphics) ims).getRenderOrderNumber(), ((ImSupplement.Graphics) ims).getBounds()) {
 					public InputStream getInputStream() throws IOException {
 						return new BufferedInputStream(new FileInputStream(sFile));
 					}
 				};
 			else if (ims instanceof ImSupplement.Scan)
-				return new ImSupplement.Scan(this, ims.getMimeType(), ((ImSupplement.Scan) ims).getPageId(), ((ImSupplement.Scan) ims).getDpi()) {
+				return new ImSupplement.Scan(this, ims.getMimeType(), ((ImSupplement.Scan) ims).getPageId(), ((ImSupplement.Scan) ims).getRenderOrderNumber(), ((ImSupplement.Scan) ims).getDpi()) {
 					public InputStream getInputStream() throws IOException {
 						return new BufferedInputStream(new FileInputStream(sFile));
 					}

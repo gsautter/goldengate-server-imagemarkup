@@ -56,6 +56,7 @@ public class PdfImporter extends ImiDocumentImporter {
 	private String docStyleListUrl;
 	private String docStyleNamePattern;
 	private File docStyleFolder;
+	private String fontCharsetPath;
 	
 	/** the usual zero-argument constructor for class loading */
 	public PdfImporter() {}
@@ -85,6 +86,26 @@ public class PdfImporter extends ImiDocumentImporter {
 		}
 		catch (IOException ioe) {
 			ioe.printStackTrace(System.out);
+		}
+		
+		//	get font decoding charset path (file or URL)
+		this.fontCharsetPath = config.getSetting("fontCharsetPath", "fontDecoderCharset.cnfg");
+		if (this.fontCharsetPath.length() > 1) {
+			if (this.fontCharsetPath.startsWith("http://")) {}
+			else if (this.fontCharsetPath.startsWith("/")) {
+				File fontCharsetFile = new File(this.fontCharsetPath);
+				if (fontCharsetFile.exists())
+					this.fontCharsetPath = fontCharsetFile.getAbsolutePath();
+				else this.fontCharsetPath = null;
+			}
+			else {
+				while (this.fontCharsetPath.startsWith("./"))
+					this.fontCharsetPath = this.fontCharsetPath.substring("./".length());
+				File fontCharsetFile = new File(this.dataPath, this.fontCharsetPath.substring("./".length()));
+				if (fontCharsetFile.exists())
+					this.fontCharsetPath = fontCharsetFile.getAbsolutePath();
+				else this.fontCharsetPath = null;
+			}
 		}
 		
 		//	install base JARs
@@ -216,6 +237,18 @@ public class PdfImporter extends ImiDocumentImporter {
 		}
 		command.addElement("-t"); // PDF type: generic
 		command.addElement(pdfType);
+		if ("D".equals(pdfType)) {
+			command.addElement("-f"); // font decoding mode: fully decode
+			command.addElement("D");
+			command.addElement("-cs"); // font decoding charset
+			if (this.fontCharsetPath == null)
+				command.addElement("U"); // no font decoding charset specified, fall back to Unicode
+			else {
+				command.addElement("C"); // custom font decoding charset: load from file or URL
+				command.addElement("-cp"); // path (file or URL) to load font decoding charset from
+				command.addElement(this.fontCharsetPath);
+			}
+		}
 		command.addElement("-o"); // output destination: document output folder
 		command.addElement(docOutFolder.getAbsolutePath());
 		
