@@ -1199,12 +1199,10 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	}
 	
 	/**
-	 * Upload a new document, using its docId attribute as the storage ID (if
-	 * the docId attribute is not set, the document's annotationId will be used
-	 * instead). In case a document already exists with the same ID as the
-	 * argument document's, an exception will be thrown. If not, the document
-	 * will be created, but no lock will be granted to the uploading user. If a
-	 * lock is required, use the updateDocument() method.
+	 * Upload a new document. In case a document already exists, an exception
+	 * will be thrown. If not, the document will be created, but no lock will
+	 * be granted to the uploading user. If a lock is required, use the
+	 * updateDocument() method.
 	 * @param userName the name of the user doing the update
 	 * @param doc the document to store
 	 * @param logger a logger for obtaining detailed information on the storage
@@ -1224,16 +1222,34 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	}
 	
 	/**
-	 * Update an existing document, or store a new one, using its docId
-	 * attribute as the storage ID (if the docId attribute is not set, the
-	 * document's annotationId will be used instead). In case of an update, the
-	 * updating user must have acquired the lock on the document in question
-	 * (via one of the checkoutDocument() methods) prior to the invocation of
-	 * this method. Otherwise, an IOException will be thrown. In case of a new
-	 * document, the lock is automatically granted to the specified user, and
-	 * remains with him until he yields it via the releaseDocument() method. If
-	 * a lock is not desired for a new document, use the uploadDocument()
-	 * method.
+	 * Update an existing document, or store a new one. In case of an update,
+	 * the updating authentication user must have acquired the lock on the
+	 * document in question (via one of the checkoutDocument() methods) prior
+	 * to the invocation of this method. Otherwise, an IOException will be
+	 * thrown. In case of a new document, the lock is automatically granted to
+	 * the specified user, and remains with him until he yields it via the
+	 * releaseDocument() method. If a lock is not desired for a new document,
+	 * use the uploadDocument() method.
+	 * @param authUserName the user name holding the checkout lock
+	 * @param doc the document to store
+	 * @param logger a logger for obtaining detailed information on the storage
+	 *            process
+	 * @return the new version number of the document just updated
+	 * @throws IOException
+	 */
+	public synchronized int updateDocument(String authUserName, ImDocument doc, EventLogger logger) throws IOException {
+		return this.updateDocument(authUserName, authUserName, doc, logger);
+	}
+	
+	/**
+	 * Update an existing document, or store a new one. In case of an update,
+	 * the updating authentication user must have acquired the lock on the
+	 * document in question (via one of the checkoutDocument() methods) prior
+	 * to the invocation of this method. Otherwise, an IOException will be
+	 * thrown. In case of a new document, the lock is automatically granted to
+	 * the specified user, and remains with him until he yields it via the
+	 * releaseDocument() method. If a lock is not desired for a new document,
+	 * use the uploadDocument() method.
 	 * @param userName the name of the user doing the update
 	 * @param authUserName the user name holding the checkout lock
 	 * @param doc the document to store
@@ -1309,6 +1325,25 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		
 		//	do update
 		return this.finalizeDocumentUpdate(docData, userName, null, ((logger == null) ? new DummyEventLogger() : logger));
+	}
+	
+	/**
+	 * Update a document from its underlying data without instantiating it.
+	 * This method only works for document data objects retrieved from either
+	 * of the <code>getDocumentData()</code> methods. If the document does not
+	 * exist, it is created; if the argument checkout user is null, it is
+	 * released afterward, otherwise the argument checkout user retains the
+	 * lock. If the document does exist and the argument checkout user is null
+	 * or does not match the current checkout user, the update fails.
+	 * @param authUserName the user name holding the checkout lock
+	 * @param docData the document data object to store
+	 * @param logger a logger for obtaining detailed information on the storage
+	 *            process
+	 * @return the new version number of the document just updated
+	 * @throws IOException
+	 */
+	public int updateDocumentFromData(String authUserName, ImsDocumentData docData, EventLogger logger) throws IOException {
+		return this.updateDocumentFromData(authUserName, authUserName, docData, logger);
 	}
 	
 	/**
@@ -1883,7 +1918,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 			GoldenGateServerEventService.notify(new ImsDocumentEvent(userName, docId, null, -1, ImsDocumentEvent.RELEASE_TYPE, GoldenGateIMS.class.getName(), System.currentTimeMillis(), null));
 		}
 	}
-
+	
 	private static final int checkoutUserCacheSize = 256;
 
 	private LinkedHashMap checkoutUserCache = new LinkedHashMap(checkoutUserCacheSize, .9f, true) {
@@ -1891,6 +1926,30 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 			return this.size() > checkoutUserCacheSize;
 		}
 	};
+	
+	/**
+	 * Check if a document with a given ID exists.
+	 * @param docId the ID of the document to check
+	 * @return true if the document with the specified ID exists
+	 * @see de.uka.ipd.idaho.goldenGateServer.dst.DocumentStore#isDocumentAvailable(String)
+	 */
+	public boolean isDocumentAvailable(String docId) {
+		String primaryFolderName = docId.substring(0, 2);
+		String secondaryFolderName = docId.substring(2, 4);
+		File docEntryListFile = new File(this.documentStorageRoot, (primaryFolderName + "/" + secondaryFolderName + "/" + docId + "/entries.txt"));
+		return docEntryListFile.exists();
+	}
+	
+	/**
+	 * Check if a document with a given ID exists and is free for checkout and
+	 * update.
+	 * @param docId the ID of the document to check
+	 * @return true if the document with the specified ID exists and is free
+	 *            for editing
+	 */
+	public boolean isDocumentEditable(String docId) {
+		return "".equals(this.getCheckoutUser(docId));
+	}
 	
 	/**
 	 * Get the name of the user who has checked out a document with a given ID
@@ -1982,10 +2041,11 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		
 		// collect field names
 		StringVector fieldNames = new StringVector();
-		fieldNames.addContent(documentDataFields);
+		for (int f = 0; f < documentDataFields.length; f++)
+			fieldNames.addElement("dd." + documentDataFields[f]);
 		for (Iterator dacnit = this.documentAttributesByName.keySet().iterator(); dacnit.hasNext();) {
 			DocumentAttribute da = ((DocumentAttribute) this.documentAttributesByName.get(dacnit.next()));
-			fieldNames.addElementIgnoreDuplicates(da.colName);
+			fieldNames.addElementIgnoreDuplicates("da." + da.colName);
 		}
 		
 		// assemble query

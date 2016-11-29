@@ -158,6 +158,10 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		
 		//	install GGI slave JAR
 		this.installJar("GgServerImpSlave.jar");
+		
+		//	TODO get list of documents from IMS
+		
+		//	TODO schedule processing for all documents we still hold the lock for (must have been interrupted by shutdown before we could save them back and release them)
 	}
 	
 	private void installJar(String name) {
@@ -272,6 +276,7 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 	}
 	
 	private static final String PROCESS_DOCUMENT_COMMAND = "process";
+	private static final String QUEUE_SIZE_COMMAND = "queueSize";
 	
 	/*
 	 * (non-Javadoc)
@@ -298,6 +303,26 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 				if (arguments.length == 1)
 					scheduleBatchRun(arguments[0]);
 				else System.out.println(" Invalid arguments for '" + this.getActionCommand() + "', specify the document ID as the only argument.");
+			}
+		};
+		cal.add(ca);
+		
+		//	check processing queue
+		ca = new ComponentActionConsole() {
+			public String getActionCommand() {
+				return QUEUE_SIZE_COMMAND;
+			}
+			public String[] getExplanation() {
+				String[] explanation = {
+						QUEUE_SIZE_COMMAND,
+						"Show current size of processing queue, i.e., number of documents waiting to be processed."
+					};
+				return explanation;
+			}
+			public void performActionConsole(String[] arguments) {
+				if (arguments.length == 0)
+					System.out.println(batchRunQueue.size() + " documents waiting to be processed.");
+				else System.out.println(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
 			}
 		};
 		cal.add(ca);

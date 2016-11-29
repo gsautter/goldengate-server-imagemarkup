@@ -41,6 +41,7 @@
 	</target>
 	<target name="fetch-im" depends="check-fetch-im" if="${im.exists}">
     	<copy file="../idaho-imagemarkup/dist/ImageMarkup.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+    	<copy file="../idaho-imagemarkup/dist/ImageMarkup.bin.jar" todir="${lib.home}" overwrite="true" verbose="false" />
 		<copy file="../idaho-imagemarkup/dist/ImageMarkupOCR.jar" todir="${lib.home}" overwrite="true" verbose="false" />
 	</target>
 	
