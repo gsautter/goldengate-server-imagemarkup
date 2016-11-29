@@ -29,11 +29,16 @@ package de.uka.ipd.idaho.goldenGateServer.imi;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.lang.reflect.Method;
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -58,6 +63,7 @@ import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.util.ImDocumentData;
 import de.uka.ipd.idaho.im.util.ImDocumentData.DataHashOutputStream;
 import de.uka.ipd.idaho.im.util.ImDocumentData.ImDocumentEntry;
+import de.uka.ipd.idaho.im.util.ImDocumentIO;
 
 /**
  * GoldenGATE Image Markup Importer provides scheduled import and decoding of
@@ -340,6 +346,28 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 	 */
 	public void linkInit() {
 		
+		//	reload pending imports
+		File importFile = new File(this.dataPath, "imports.txt");
+		if (importFile.exists()) try {
+			BufferedReader importBr = new BufferedReader(new InputStreamReader(new FileInputStream(importFile), "UTF-8"));
+			for (String importData; (importData = importBr.readLine()) != null;) {
+				String[] importAttributes = importData.split("\\t");
+				if (importAttributes.length == 5) {
+					ImiDocumentImport di;
+					if ("".equals(importAttributes[0]))
+						di = new ImiDocumentImport(("".equals(importAttributes[2]) ? null : importAttributes[2]), new File(importAttributes[1]), "D".equals(importAttributes[3]));
+					else di = new ImiDocumentImport(("".equals(importAttributes[2]) ? null : importAttributes[2]), new URL(importAttributes[0]));
+					ImDocumentIO.setAttributes(di, importAttributes[4]);
+					this.enqueueImport(di);
+				}
+			}
+			importBr.close();
+		}
+		catch (Exception e) {
+			System.out.println("ImageMarkupImporter: Error restoring pending update events from file '" + importFile.getAbsolutePath() + "': " + e.getMessage());
+			e.printStackTrace(System.out);
+		}
+		
 		//	load importers
 		this.loadImporters(false);
 		
@@ -417,6 +445,41 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 	 */
 	protected void exitComponent() {
 		
+		//	get pending imports
+		ArrayList imports = new ArrayList(this.importQueue);
+		
+		//	delete pending import file if empty
+		File importFile = new File(this.dataPath, "imports.txt");
+		if (imports.isEmpty()) {
+			if (importFile.exists()) try {
+				importFile.delete();
+			}
+			catch (Exception e) {
+				System.out.println("ImageMarkupImporter: Error deleting import file '" + importFile.getAbsolutePath() + "': " + e.getMessage());
+				e.printStackTrace(System.out);
+			}
+		}
+		
+		//	store any pending imports on disk
+		else try {
+			BufferedWriter importBw = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(importFile), "UTF-8"));
+			for (int i = 0; i < imports.size(); i++) {
+				ImiDocumentImport di = ((ImiDocumentImport) imports.get(i));
+				importBw.write((di.dataUrl == null) ? "" : di.dataUrl.toString());
+				importBw.write("\t" + ((di.dataFile == null) ? "" : di.dataFile.getAbsolutePath()));
+				importBw.write("\t" + ((di.dataMimeType == null) ? "" : di.dataMimeType));
+				importBw.write("\t" + (di.deleteDataFile ? "D" : "R"));
+				importBw.write("\t" + ImDocumentIO.getAttributesString(di));
+				importBw.newLine();
+			}
+			importBw.flush();
+			importBw.close();
+		}
+		catch (Exception e) {
+			System.out.println("ImageMarkupImporter: Error storing pending imports to file '" + importFile.getAbsolutePath() + "': " + e.getMessage());
+			e.printStackTrace(System.out);
+		}
+		
 		//	shut down import handler thread
 		synchronized (this.importQueue) {
 			this.importQueue.clear();
@@ -429,6 +492,7 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 	
 	private static final String IMPORT_DOCUMENT_COMMAND = "import";
 	private static final String RELOAD_IMPORTERS_COMMAND = "reload";
+	private static final String QUEUE_SIZE_COMMAND = "queueSize";
 	
 	/*
 	 * (non-Javadoc)
@@ -531,6 +595,10 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 				if (user != defaultImportUserName)
 					docAttributes.setAttribute(GoldenGateIMS.CHECKIN_USER_ATTRIBUTE, user);
 				
+				//	add file name to attributes
+				if (docDataSize > 0)
+					docAttributes.setAttribute(GoldenGateIMS.DOCUMENT_NAME_ATTRIBUTE, docDataNameOrUrl);
+				
 				//	prepare handling upload
 				String docId;
 				String docStatus;
@@ -631,13 +699,33 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 			public String[] getExplanation() {
 				String[] explanation = {
 						RELOAD_IMPORTERS_COMMAND,
-						"Reload the importers currently installed in this DIC."
+						"Reload the importers currently installed in this IMI."
 					};
 				return explanation;
 			}
 			public void performActionConsole(String[] arguments) {
 				if (arguments.length == 0)
 					loadImporters(true);
+				else System.out.println(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
+			}
+		};
+		cal.add(ca);
+		
+		//	check import queue
+		ca = new ComponentActionConsole() {
+			public String getActionCommand() {
+				return QUEUE_SIZE_COMMAND;
+			}
+			public String[] getExplanation() {
+				String[] explanation = {
+						QUEUE_SIZE_COMMAND,
+						"Show current size of import queue, i.e., number of pending imports."
+					};
+				return explanation;
+			}
+			public void performActionConsole(String[] arguments) {
+				if (arguments.length == 0)
+					System.out.println(importQueue.size() + " document imports pending.");
 				else System.out.println(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
 			}
 		};

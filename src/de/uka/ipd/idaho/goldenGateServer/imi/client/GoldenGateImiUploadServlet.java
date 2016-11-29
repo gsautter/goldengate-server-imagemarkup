@@ -77,7 +77,8 @@ import de.uka.ipd.idaho.plugins.bibRefs.refBank.RefBankClient.BibRefIterator;
  * @author sautter
  */
 public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements BibRefConstants {
-	private static final int uploadMaxLength = (25 * 1024 * 1024); // 25MB for starters
+	private static final int postUploadMaxLength = (25 * 1024 * 1024); // 25MB for starters
+	private static final int putUploadMaxLength = (100 * 1024 * 1024); // 25MB for starters
 	private static Set fileFieldNames = Collections.synchronizedSet(new HashSet());
 	static {
 		fileFieldNames.add("uploadDocFile");
@@ -582,7 +583,7 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		}
 		
 		//	receive upload
-		FormDataReceiver data = FormDataReceiver.receive(request, uploadMaxLength, this.uploadCacheFolder, 1024, fileFieldNames);
+		FormDataReceiver data = FormDataReceiver.receive(request, postUploadMaxLength, this.uploadCacheFolder, 1024, fileFieldNames);
 		
 		//	get user name to credit
 		String mimeType = data.getFieldValue("uploadDocMimeType");
@@ -691,7 +692,7 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		String metaDataMode = request.getHeader("Meta-Data-Mode");
 		
 		//	receive upload
-		FormDataReceiver data = FormDataReceiver.receive(request, uploadMaxLength, this.uploadCacheFolder, 1024, fileFieldNames);
+		FormDataReceiver data = FormDataReceiver.receive(request, putUploadMaxLength, this.uploadCacheFolder, 1024, fileFieldNames);
 		
 		//	get upload file MIME type
 		String mimeType = data.getFieldValue("mimeType");
@@ -729,7 +730,7 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		//	get input stream for document proper
 		FieldValueInputStream docDataSource = data.getFieldByteStream("file");
 		
-		//	send upload to backing BDP
+		//	send upload to backing IMI
 		Properties uDocAttributes = this.imiClient.uploadDocument(docDataSource, docDataSource.fieldLength, docDataSource.fileName, mimeType, docAttributes, user);
 		
 		//	send JSON object with upload log array and updated document attributes
