@@ -925,8 +925,8 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 					zout.write(buffer, 0, r);
 				cacheIn.close();
 				zout.closeEntry();
-				
 			}
+			
 			ZipEntry ze = new ZipEntry(updateKey);
 			zout.putNextEntry(ze);
 			zout.closeEntry();

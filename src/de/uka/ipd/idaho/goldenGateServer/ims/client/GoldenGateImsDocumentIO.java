@@ -158,6 +158,7 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 	
 	private GoldenGateImsClient imsClient = null;
 	private DocumentCache cache = null;
+	private TreeMap cacheDocumentData = new TreeMap();
 	
 	private HashSet openDocumentIDs = new HashSet();
 	
@@ -227,12 +228,20 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 		if (!this.openDocumentIDs.remove(docId))
 			return;
 		
+		//	clear cached document data object
+		for (Iterator cddit = this.cacheDocumentData.keySet().iterator(); cddit.hasNext();) {
+			String cddKey = ((String) cddit.next());
+			if (cddKey.endsWith(docId))
+				cddit.remove();
+		}
+		
 		//	we've been logged out
-		if (this.imsClient == null)
+		if ((this.authClient == null) || (this.imsClient == null))
 			return;
 		
-		//	release document if checked out explicitly
+		//	release document if not checked out explicitly
 		if ((this.cache == null) || !this.cache.isExplicitCheckout(docId)) try {
+			this.authClient.ensureLoggedIn();
 			this.imsClient.releaseDocument(docId);
 			if (this.cache != null)
 				this.cache.unstoreDocument(docId);
@@ -247,7 +256,6 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 	 * @see de.uka.ipd.idaho.im.imagine.plugins.ImageDocumentIoProvider#loadDocument(de.uka.ipd.idaho.gamta.util.ProgressMonitor)
 	 */
 	public ImDocument loadDocument(final ProgressMonitor pm) {
-		System.out.println("ImsDocumentIO (" + this.getClass().getName() + "): loading document");
 		pm.setInfo("Checking authentication at GoldenGATE Server ...");
 		if (pm instanceof ControllingProgressMonitor) {
 			((ControllingProgressMonitor) pm).setPauseResumeEnabled(true);
@@ -255,6 +263,39 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 			((ControllingProgressMonitor) pm).setAbortExceptionMessage("ABORTED BY USER");
 		}
 		this.ensureLoggedIn(pm);
+		
+		
+		//	offer fetching document directly by name or ID, without loading whole list
+		pm.setInfo("Opening direct loading dialog ...");
+		
+		//	display document ID input
+		DocumentLoadDialog dlod = new DocumentLoadDialog("Open Document Directly");
+		dlod.setLocationRelativeTo(DialogPanel.getTopWindow());
+		dlod.setVisible(true);
+		
+		//	get selected document
+		ImDocumentData docData = dlod.getDocumentData();
+		if (docData == null)
+			return null;
+		
+		//	forwarded to document list
+		if (docData == LOAD_DOCUMENT_LIST)
+			docData = null;
+		
+		//	load selected document (unless forwarded to list)
+		else try {
+			ImDocument doc = ImDocumentIO.loadDocument(docData, pm);
+			
+			//	remember opening document, so we can release it when it's closed
+			this.openDocumentIDs.add(doc.docId);
+			
+			//	finally ...
+			return doc;
+		}
+		catch (Throwable t) {
+			t.printStackTrace(System.out);
+		}
+		
 		
 		//	get list of documents
 		ImsDocumentListBuffer documentList;
@@ -325,13 +366,14 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 		
 		pm.setInfo("Document list loaded, opening selector dialog ...");
 		try {
+			
 			//	display document list
-			DocumentListDialog dld = new DocumentListDialog("Select Document", documentList, this.authManager.getUser(), ((this.authClient != null) && this.authClient.isAdmin()));
-			dld.setLocationRelativeTo(DialogPanel.getTopWindow());
-			dld.setVisible(true);
+			DocumentListDialog dlid = new DocumentListDialog("Select Document", documentList, this.authManager.getUser(), ((this.authClient != null) && this.authClient.isAdmin()));
+			dlid.setLocationRelativeTo(DialogPanel.getTopWindow());
+			dlid.setVisible(true);
 			
 			//	get selected document
-			ImDocumentData docData = dld.getDocumentData();
+			docData = dlid.getDocumentData();
 			if (docData == null)
 				return null;
 			
@@ -350,6 +392,160 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 		}
 	}
 	
+	private class DocumentLoadDialog extends DialogPanel {
+		
+		private JTextField docIdField = new JTextField();
+		
+		private ImDocumentData loadDocData = null;
+		
+		DocumentLoadDialog(String title) {
+			super(title, true);
+			
+			JPanel docIdPanel = new JPanel(new BorderLayout(), true);
+			docIdPanel.add(new JLabel("Document ID: ", JLabel.LEFT), BorderLayout.WEST);
+			docIdPanel.add(this.docIdField, BorderLayout.CENTER);
+			this.docIdField.addActionListener(new ActionListener() {
+				public void actionPerformed(ActionEvent ae) {
+					openDoc();
+				}
+			});
+			
+			JPanel contentPanel = new JPanel(new BorderLayout(), true);
+			contentPanel.add(new JLabel("Enter document ID to load a specific document directly, or proceed to document list.", JLabel.CENTER), BorderLayout.CENTER);
+			contentPanel.add(docIdPanel, BorderLayout.SOUTH);
+			
+			JButton listButton = new JButton("Show List");
+			listButton.setBorder(BorderFactory.createRaisedBevelBorder());
+			listButton.setPreferredSize(new Dimension(100, 21));
+			listButton.addActionListener(new ActionListener() {
+				public void actionPerformed(ActionEvent ae) {
+					loadDocData = LOAD_DOCUMENT_LIST;
+					dispose();
+				}
+			});
+			
+			JButton loadButton = new JButton("Load");
+			loadButton.setBorder(BorderFactory.createRaisedBevelBorder());
+			loadButton.setPreferredSize(new Dimension(100, 21));
+			loadButton.addActionListener(new ActionListener() {
+				public void actionPerformed(ActionEvent ae) {
+					openDoc();
+				}
+			});
+			
+			JButton cancelButton = new JButton("Cancel");
+			cancelButton.setBorder(BorderFactory.createRaisedBevelBorder());
+			cancelButton.setPreferredSize(new Dimension(100, 21));
+			cancelButton.addActionListener(new ActionListener() {
+				public void actionPerformed(ActionEvent ae) {
+					if ((cache != null) && (imsClient != null))
+						cache.cleanup(imsClient);
+					dispose();
+				}
+			});
+			
+			JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
+			buttonPanel.add(listButton);
+			buttonPanel.add(loadButton);
+			buttonPanel.add(cancelButton);
+			
+			this.add(contentPanel, BorderLayout.CENTER);
+			this.add(buttonPanel, BorderLayout.SOUTH);
+			
+			this.setSize(new Dimension(500, 120));
+		}
+		
+		private void openDoc() {
+			String docId = this.docIdField.getText().trim();
+			docId = docId.replaceAll("\\-", "");
+			if (docId.matches("[0-9A-Fa-f]{32}"))
+				this.openDoc(docId);
+			else DialogFactory.alert("Please enter a valid document ID for direct loading.", "Invalid Document ID", JOptionPane.ERROR_MESSAGE);
+		}
+		
+		private void openDoc(final String docId) {
+			
+			//	create progress monitor
+			final ProgressMonitorDialog pmd = new ProgressMonitorDialog(false, true, DialogPanel.getTopWindow(), "Loading Document from GoldenGATE IMS ...");
+			pmd.setAbortExceptionMessage("ABORTED BY USER");
+			pmd.setInfoLineLimit(1);
+			pmd.getWindow().setSize(400, 150);
+			pmd.getWindow().setLocationRelativeTo(pmd.getWindow().getOwner());
+			
+			//	load in separate thread
+			Thread dl = new Thread() {
+				public void run() {
+					
+					//	open document
+					try {
+						ImDocumentData docData = null;
+						
+						if ((cache != null) && (cache.containsDocument(docId))) {
+							pmd.setInfo("Loading document from cache ...");
+							docData = cache.loadDocumentData(docId, (imsClient == null));
+							pmd.setInfo("Document loaded from cache.");
+							pmd.setProgress(100);
+						}
+						
+						if ((docData == null) && (imsClient != null))
+							docData = checkoutDocumentDataFromServer(docId, 0, docId, pmd);
+						
+						if (docData == null)
+							throw new IOException("Cannot open a document from GoldenGATE Server without authentication.");
+						
+						loadDocData = docData;
+						
+						if (cache != null) {
+							cache.markOpen(docId);
+							if (imsClient != null)
+								cache.cleanup(imsClient);
+						}
+						
+						dispose();
+					}
+					catch (RuntimeException re) {
+						if (!"ABORTED BY USER".equals(re.getMessage()))
+							throw re;
+					}
+					catch (IOException ioe) {
+//						loadException = new Exception(("An error occurred while loading document '" + docName + "' from the DIO at\n" + authManager.getHost() + ":" + authManager.getPort() + "\n" + ioe.getMessage()), ioe);
+					}
+					finally {
+						pmd.close();
+					}
+				}
+			};
+			
+			dl.start();
+			pmd.popUp(true);
+		}
+		
+		ImDocumentData getDocumentData() {
+			return this.loadDocData;
+		}
+	}
+	
+	private static final ImDocumentData LOAD_DOCUMENT_LIST = new ImDocumentData() {
+		public boolean hasEntryData(ImDocumentEntry entry) {
+			return false;
+		}
+		public InputStream getInputStream(String entryName) throws IOException {
+			return null;
+		}
+		public OutputStream getOutputStream(String entryName, boolean writeDirectly) throws IOException {
+			return null;
+		}
+		public String getDocumentDataId() {
+			return null;
+		}
+		public boolean canLoadDocument() {
+			return false;
+		}
+		public boolean canStoreDocument() {
+			return false;
+		}
+	};
+	
 	/* (non-Javadoc)
 	 * @see de.uka.ipd.idaho.im.imagine.plugins.ImageDocumentIoProvider#saveDocument(de.uka.ipd.idaho.im.ImDocument, java.lang.String, de.uka.ipd.idaho.gamta.util.ProgressMonitor)
 	 */
@@ -363,18 +559,17 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 		}
 		
 		//	cache document if possible
-		boolean docCached;
+		ImDocumentData cachedDocData = null;
 		if (this.cache != null) {
 			if (pm != null)
 				pm.setInfo("Caching document ...");
-			docCached = this.cache.storeDocument(doc, docName);
+			cachedDocData = this.cache.storeDocument(doc, docName, pm);
 		}
-		else docCached = false;
 		
 		//	server unreachable, we're done here
 		if (this.imsClient == null) {
-			DialogFactory.alert(("Could not upload '" + docName + "' to GoldenGATE Server at " + authManager.getHost() + "\nbecause this server is unreachable at the moment." + (docCached ? "\n\nThe document has been stored to the local cache\nand will be uploaded when you log in next time." : "")), ("Server Unreachable" + (docCached ? " - Document Cached" : "")), JOptionPane.INFORMATION_MESSAGE);
-			return (docCached ? docName : null);
+			DialogFactory.alert(("Could not upload '" + docName + "' to GoldenGATE Server at " + authManager.getHost() + "\nbecause this server is unreachable at the moment." + ((cachedDocData == null) ? "" : "\n\nThe document has been stored to the local cache\nand will be uploaded when you log in next time.")), ("Server Unreachable" + ((cachedDocData == null) ? "" : " - Document Cached")), JOptionPane.INFORMATION_MESSAGE);
+			return ((cachedDocData == null) ? null : docName);
 		}
 		
 		try {
@@ -387,7 +582,10 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 			}
 			
 			//	upload document
-			String[] uploadProtocol = this.imsClient.updateDocument(doc, pm);
+			String[] uploadProtocol;
+			if (cachedDocData == null)
+				uploadProtocol = this.imsClient.updateDocument(doc, pm);
+			else uploadProtocol = this.imsClient.updateDocumentFromData(doc.docId, cachedDocData, pm);
 			
 			//	mark cache as clean
 			if (this.cache != null) {
@@ -423,7 +621,7 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 			return docName;
 		}
 		catch (IOException ioe) {
-			DialogFactory.alert(("An error occurred while uploading document '" + docName + "' to the GoldenGATE Server at\n" + authManager.getHost() + ":" + authManager.getPort() + "\n" + ioe.getMessage() + (docCached ? "" : "\n\nThe document has been stored to the local cache\nand will be uploaded when you log in next time.")), ("Error Uploading Document"), JOptionPane.ERROR_MESSAGE);
+			DialogFactory.alert(("An error occurred while uploading document '" + docName + "' to the GoldenGATE Server at\n" + authManager.getHost() + ":" + authManager.getPort() + "\n" + ioe.getMessage() + ((cachedDocData == null) ? "" : "\n\nThe document has been stored to the local cache\nand will be uploaded when you log in next time.")), ("Error Uploading Document"), JOptionPane.ERROR_MESSAGE);
 			return null;
 		}
 	}
@@ -511,7 +709,7 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 		}
 	}
 	
-	private ImDocumentData checkoutDocumentDataFromServer(String docId, int version, String docName, int readTimeout, ProgressMonitor pm) throws IOException {
+	private ImDocumentData checkoutDocumentDataFromServer(String docId, int version, String docName, ProgressMonitor pm) throws IOException {
 		pm.setInfo("Loading document from GoldenGATE IMS ...");
 		
 		try {
@@ -539,128 +737,12 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 			}
 			throw re;
 		}
-//		catch (TimeoutException te) {
-//			te.printStackTrace(System.out);
-//			try {
-//				this.imsClient.releaseDocument(docId);
-//			}
-//			catch (Exception ioe) {
-//				ioe.printStackTrace(System.out);
-//			}
-//			JOptionPane.showMessageDialog(promptParent, ("Loading document '" + docName + "' from the GoldenGATE Server at\n" + authManager.getHost() + ":" + authManager.getPort() + " timed out after " + readTimeout + " seconds.\nUse the 'Read Timeout' field below to increase the timeout."), ("Error Loading Document"), JOptionPane.ERROR_MESSAGE);
-//			throw te;
-//		}
 		catch (IOException ioe) {
 			ioe.printStackTrace(System.out);
 			DialogFactory.alert(("An error occurred while loading document '" + docName + "' from the GoldenGATE Server at\n" + authManager.getHost() + ":" + authManager.getPort() + "\n" + ioe.getMessage()), ("Error Loading Document"), JOptionPane.ERROR_MESSAGE);
 			throw ioe;
 		}
 	}
-//	
-//	private class TimeoutReader extends Reader {
-//		DocumentReader dr;
-//		ProgressMonitor pm;
-//		int readTimeout;
-//		int readTotal = 0;
-//		TimeoutReader(DocumentReader dr, ProgressMonitor pm, int readTimeout) {
-//			this.dr = dr;
-//			this.pm = pm;
-//			this.readTimeout = readTimeout;
-//		}
-//		public void close() throws IOException {
-//			this.pm.setProgress(100);
-//			this.dr.close();
-//		}
-//		public int read(final char[] cbuf, final int off, final int len) throws IOException {
-//			final int[] read = {-2};
-//			final IOException ioe[] = {null};
-//			final Object readLock = new Object();
-//			
-//			//	create reader
-//			Thread reader = new Thread() {
-//				public void run() {
-//					synchronized (readLock) {
-//						readLock.notify();
-//					}
-//					
-//					try {
-//						System.out.println("Start timed reading");
-//						read[0] = dr.read(cbuf, off, len);
-//						System.out.println(" --> read " + read[0] + " chars");
-//					}
-//					catch (IOException ioex) {
-//						ioe[0] = ioex;
-//						System.out.println(" --> exception: " + ioex.getMessage());
-//					}
-//					finally {
-//						synchronized (readLock) {
-//							readLock.notify();
-//						}
-//					}
-//				}
-//			};
-//			
-//			//	start reader and wait for it
-//			synchronized (readLock) {
-//				reader.start();
-//				try {
-//					readLock.wait();
-//				} catch (InterruptedException ie) {}
-//			}
-//			
-//			//	wait for reading to succeed, be cancelled, or time out
-//			long readDeadline = ((readTimeout < 1) ? Long.MAX_VALUE : (System.currentTimeMillis() + (readTimeout * 1000)));
-//			do {
-//				
-//				//	wait a bit
-//				synchronized (readLock) {
-//					try {
-//						readLock.wait(500);
-//					} catch (InterruptedException ie) {}
-//				}
-//				
-//				//	reading exception
-//				if (ioe[0] != null) {
-//					System.out.println("Reader threw exception: " + ioe[0].getMessage());
-//					throw ioe[0];
-//				}
-//				
-//				//	read successful
-//				if (read[0] != -2) {
-//					System.out.println("Reader read " + read[0] + " chars");
-//					this.pm.setProgress((100 * this.readTotal) / this.dr.docLength()); // throws runtime exception if checkout aborted
-//					this.readTotal += read[0];
-//					return read[0];
-//				}
-//			}
-//			
-//			//	check for timeout
-//			while (System.currentTimeMillis() < readDeadline);
-//			
-//			//	read timeout, close asynchronously and throw exception
-//			Thread closer = new Thread() {
-//				public void run() {
-//					try {
-//						System.out.println("Start timed closing");
-//						dr.close();
-//						System.out.println(" --> closed");
-//					}
-//					catch (IOException ioe) {
-//						System.out.println(" --> exception on closing: " + ioe.getMessage());
-//					}
-//				}
-//			};
-//			closer.start();
-//			
-//			throw new TimeoutException("Read timeout");
-//		}
-//	}
-//	
-//	private class TimeoutException extends IOException {
-//		TimeoutException(String message) {
-//			super(message);
-//		}
-//	}
 	
 	private final String produceFieldLabel(String fieldName) {
 		String listFieldLabel = listFieldLabels.getProperty(fieldName);
@@ -1286,7 +1368,10 @@ reduce document list loading effort:
 			this.docTable.addMouseListener(new MouseAdapter() {
 				public void mouseClicked(MouseEvent me) {
 					int row = docTable.getSelectedRow();
-					if (row == -1) return;
+					if (row == -1)
+						return;
+					if ("Local Master Configuration".equals(imagineParent.getConfigurationName()))
+						System.out.println("Selected document '" + listData[row].data.getValue(DOCUMENT_NAME_ATTRIBUTE) + "' (" + listData[row].data.getValue(DOCUMENT_ID_ATTRIBUTE) + ")");					
 					if (me.getClickCount() > 1)
 						open(row, 0);
 					else if (me.getButton() != MouseEvent.BUTTON1)
@@ -1392,7 +1477,6 @@ reduce document list loading effort:
 			fieldNames.addContent(listFieldOrder);
 			for (int f = 0; f < this.docList.listFieldNames.length; f++) {
 				String fieldName = this.docList.listFieldNames[f];
-//				if (!DOCUMENT_ID_ATTRIBUTE.equals(fieldName) && (DOCUMENT_TITLE_ATTRIBUTE.equals(fieldName) || !listTitlePatternAttributes.contains(fieldName)))
 				if (!DOCUMENT_ID_ATTRIBUTE.equals(fieldName))
 					fieldNames.addElementIgnoreDuplicates(fieldName);
 			}
@@ -1409,19 +1493,6 @@ reduce document list loading effort:
 				}
 				
 				boolean fieldEmpty = true;
-//				if (DOCUMENT_TITLE_ATTRIBUTE.equals(fieldName))
-//					for (int t = 0; t < listTitlePatternAttributes.size(); t++) {
-//						fieldName = listTitlePatternAttributes.get(t);
-//						for (int d = 0; d < this.listData.length; d++) {
-//							if (!"".equals(this.listData[d].data.getValue(fieldName, ""))) {
-//								fieldEmpty = false;
-//								d = this.listData.length;
-//								t = listTitlePatternAttributes.size();
-//							}
-//						}
-//					}
-//				
-//				else 
 				for (int d = 0; d < this.listData.length; d++)
 					if (!"".equals(this.listData[d].data.getValue(fieldName, ""))) {
 						fieldEmpty = false;
@@ -1508,10 +1579,6 @@ reduce document list loading effort:
 		
 		private void sortList(String sortField) {
 			final StringVector sortFields = new StringVector();
-//			if (sortField != null) {
-//				if (DOCUMENT_TITLE_ATTRIBUTE.equals(sortField) && (listTitlePatternAttributes.size() != 0))
-//					sortFields.addContentIgnoreDuplicates(listTitlePatternAttributes);
-//				else sortFields.addElement(sortField);
 			if (sortField != null)
 				sortFields.addElement(sortField);
 			sortFields.addContent(listSortKeys);
@@ -1606,10 +1673,10 @@ reduce document list loading effort:
 			final String docName = this.listData[row].data.getValue(DOCUMENT_NAME_ATTRIBUTE);
 			
 			//	create progress monitor
-			final ProgressMonitorDialog pmd = new ProgressMonitorDialog(false, true, DialogPanel.getTopWindow(), "Loading Document from GoldenGATE DIO ...");
+			final ProgressMonitorDialog pmd = new ProgressMonitorDialog(false, true, DialogPanel.getTopWindow(), "Loading Document from GoldenGATE IMS ...");
 			pmd.setAbortExceptionMessage("ABORTED BY USER");
 			pmd.setInfoLineLimit(1);
-			pmd.getWindow().setSize(400, 100);
+			pmd.getWindow().setSize(400, 150);
 			pmd.getWindow().setLocationRelativeTo(pmd.getWindow().getOwner());
 			
 			//	load in separate thread
@@ -1628,7 +1695,7 @@ reduce document list loading effort:
 						}
 						
 						if ((docData == null) && (imsClient != null))
-							docData = checkoutDocumentDataFromServer(docId, version, docName, readTimeout.getNumber().intValue(), pmd);
+							docData = checkoutDocumentDataFromServer(docId, version, docName, pmd);
 						
 						if (docData == null)
 							throw new IOException("Cannot open a document from GoldenGATE Server without authentication.");
@@ -1813,7 +1880,8 @@ reduce document list loading effort:
 				public void run() {
 					try {
 						String docName = docData.getValue(DOCUMENT_NAME_ATTRIBUTE);
-						checkoutDocumentDataFromServer(docId, 0, docName, readTimeout.getNumber().intValue(), pmd);
+//						checkoutDocumentDataFromServer(docId, 0, docName, readTimeout.getNumber().intValue(), pmd);
+						checkoutDocumentDataFromServer(docId, 0, docName, pmd);
 						cache.markExplicitCheckout(docId);
 						docData.setValue(CACHE_STATUS_ATTRIBUTE, "Localized");
 						
@@ -1901,7 +1969,7 @@ reduce document list loading effort:
 			pmd.popUp(true);
 		}
 		
-		ImDocumentData getDocumentData() throws Exception {
+		ImDocumentData getDocumentData() {
 			return this.loadDocData;
 		}
 	}
@@ -1962,7 +2030,7 @@ reduce document list loading effort:
 			return this.fieldNames.length;
 		}
 		public int getRowCount() {
-			return listData.length;
+			return this.listData.length;
 		}
 		public boolean isCellEditable(int rowIndex, int columnIndex) {
 			return false;
@@ -1971,22 +2039,7 @@ reduce document list loading effort:
 		
 		public Object getValueAt(int rowIndex, int columnIndex) {
 			String fieldName = this.fieldNames[columnIndex];
-			String fieldValue = "";
-			final StringTupel rowData = listData[rowIndex].data;
-			
-			//	format title
-//			if (DOCUMENT_TITLE_ATTRIBUTE.equals(fieldName)) {
-//				fieldValue = createDisplayTitle(new Properties() {
-//					public String getProperty(String key, String defaultValue) {
-//						return rowData.getValue(key, defaultValue);
-//					}
-//					public String getProperty(String key) {
-//						return rowData.getValue(key);
-//					}
-//				});
-//			}
-//			else
-			fieldValue = rowData.getValue(this.fieldNames[columnIndex], "");
+			String fieldValue = this.listData[rowIndex].data.getValue(this.fieldNames[columnIndex], "");
 			
 			//	format timestamp
 			if (false
@@ -2082,9 +2135,9 @@ reduce document list loading effort:
 		}
 	}
 	
-	private static class DocumentCache implements DocumentDataCache {
-		private static final String EXPLICIT_CHECKOUT = "EC";
-		private static final String DIRTY = "D";
+	private static final String EXPLICIT_CHECKOUT = "EC";
+	private static final String DIRTY = "D";
+	private class DocumentCache implements DocumentDataCache {
 		private StringVector metaDataStorageKeys = new StringVector();
 		
 		private GoldenGatePluginDataProvider dataProvider;
@@ -2130,7 +2183,20 @@ reduce document list loading effort:
 		}
 		
 		public ImDocumentData getDocumentData(String docId) throws IOException {
-			return new ImsClientCacheDocumentData(docId);
+			
+			/* have to make damn sure to reuse any document data object a
+			 * document has been instantiated on top of (page images or
+			 * supplements might have changed, so re-reading entry list is
+			 * not good); caching has to persist beyond intermediate logout,
+			 * change of user name, etc. */
+			
+			String docDataCacheKey = (this.cachePrefix + docId);
+			ImsClientCacheDocumentData docData = ((ImsClientCacheDocumentData) cacheDocumentData.get(docDataCacheKey));
+			if (docData == null) {
+				docData = new ImsClientCacheDocumentData(docId);
+				cacheDocumentData.put(docDataCacheKey, docData);
+			}
+			return docData;
 		}
 		
 		private class ImsClientCacheDocumentData extends ImDocumentData {
@@ -2243,7 +2309,7 @@ reduce document list loading effort:
 			return (this.host.equals(host) && this.user.equals(user));
 		}
 		
-		synchronized boolean storeDocument(ImDocument doc, String documentName) {
+		synchronized ImDocumentData storeDocument(ImDocument doc, String documentName, ProgressMonitor pm) {
 			
 			//	collect meta data
 			String time = ("" + System.currentTimeMillis());
@@ -2276,6 +2342,10 @@ reduce document list loading effort:
 			
 			try {
 				
+				//	store document
+				ImDocumentData docData = this.getDocumentData(doc.docId);
+				ImDocumentIO.storeDocument(doc, docData, pm);
+				
 				//	mark as dirty (remember there are cached changes not forwarded to server yet)
 				docMetaData.setValue(DIRTY, DIRTY);
 				this.cacheMetaData.put(docId, docMetaData);
@@ -2283,11 +2353,11 @@ reduce document list loading effort:
 				this.storeMetaData();
 				
 				//	indicate success
-				return true;
+				return docData;
 			}
 			catch (IOException ioe) {
 				DialogFactory.alert(("An error occurred while storing document '" + documentName + "' to local cache for GoldenGATE Server at " + this.host + "\n" + ioe.getMessage()), ("Error Caching Document"), JOptionPane.ERROR_MESSAGE);
-				return false;
+				return null;
 			}
 		}
 		
@@ -2309,7 +2379,7 @@ reduce document list loading effort:
 		synchronized void unstoreDocument(String docId) throws IOException {
 			this.openDocuments.remove(docId);
 			this.cacheMetaData.remove(docId);
-			//	TODO clean up cached data files
+			//	TODO_not clean up cached data files ==> won't work through data provider anyway (never deletes, only renames)
 			this.storeMetaData();
 		}
 		
