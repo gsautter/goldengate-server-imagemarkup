@@ -267,9 +267,13 @@ public class StandaloneDocumentStyleProvider implements BibRefConstants, Documen
 			int dsAnchorMatchCount = 0;
 			for (int a = 0; a < ds.anchors.length; a++) {
 				System.out.println("   - testing anchor " + ds.anchors[a].pattern + " at " + ds.anchors[a].area);
-				if (anchorMatches(doc, ds.anchors[a].area, ds.anchors[a].minFontSize, ds.anchors[a].maxFontSize, ds.anchors[a].isBold, ds.anchors[a].isItalics, ds.anchors[a].isAllCaps, ds.anchors[a].pattern)) {
+				if (anchorMatches(doc, doc.getFirstPageId(), ds.anchors[a].area, ds.anchors[a].minFontSize, ds.anchors[a].maxFontSize, ds.anchors[a].isBold, ds.anchors[a].isItalics, ds.anchors[a].isAllCaps, ds.anchors[a].pattern)) {
 					dsAnchorMatchCount++;
-					System.out.println("   --> match");
+					System.out.println("   --> match on first page");
+				}
+				else if ((ds.anchorPageId != 0) && anchorMatches(doc, ds.anchorPageId, ds.anchors[a].area, ds.anchors[a].minFontSize, ds.anchors[a].maxFontSize, ds.anchors[a].isBold, ds.anchors[a].isItalics, ds.anchors[a].isAllCaps, ds.anchors[a].pattern)) {
+					dsAnchorMatchCount++;
+					System.out.println("   --> match after cover pages");
 				}
 				else System.out.println("   --> no match");
 			}
@@ -294,20 +298,20 @@ public class StandaloneDocumentStyleProvider implements BibRefConstants, Documen
 		return bestDocStyle;
 	}
 	
-	private static boolean anchorMatches(ImDocument doc, BoundingBox area, int minFontSize, int maxFontSize, boolean isBold, boolean isItalics, boolean isAllCaps, String pattern) {
-		return anchorMatches(doc, area, minFontSize, maxFontSize, isBold, isItalics, isAllCaps, pattern, null);
+	private static boolean anchorMatches(ImDocument doc, int pageId, BoundingBox area, int minFontSize, int maxFontSize, boolean isBold, boolean isItalics, boolean isAllCaps, String pattern) {
+		return anchorMatches(doc, pageId, area, minFontSize, maxFontSize, isBold, isItalics, isAllCaps, pattern, null);
 	}
 	
-	private static boolean anchorMatches(ImDocument doc, BoundingBox area, int minFontSize, int maxFontSize, boolean isBold, boolean isItalics, boolean isAllCaps, String pattern, List matchLog) {
+	private static boolean anchorMatches(ImDocument doc, int pageId, BoundingBox area, int minFontSize, int maxFontSize, boolean isBold, boolean isItalics, boolean isAllCaps, String pattern, List matchLog) {
 		
 		//	get page and scale bounding box
-		ImPage page = doc.getPage(0);
+		ImPage page = doc.getPage(pageId);
 		area = DocumentStyle.scaleBox(area, 72, page.getImageDPI());
 		if (matchLog != null)
 			matchLog.add(" - area scaled to " + page.getImageDPI() + " DPI: " + area.toString());
 		
 		//	get words in area
-		ImWord[] words = doc.getPage(0).getWordsInside(area);
+		ImWord[] words = page.getWordsInside(area);
 		if (words.length == 0) {
 			if (matchLog != null)
 				matchLog.add(" ==> no words found in area, mismatch");
@@ -390,6 +394,7 @@ public class StandaloneDocumentStyleProvider implements BibRefConstants, Documen
 	
 	private static class DocStyle {
 		DocStyleAnchor[] anchors;
+		int anchorPageId;
 		Settings paramList;
 		DocStyle(Settings paramList) {
 			this.paramList = paramList;
@@ -420,6 +425,7 @@ public class StandaloneDocumentStyleProvider implements BibRefConstants, Documen
 				} catch (NumberFormatException nfe) {}
 			}
 			this.anchors = ((DocStyleAnchor[]) anchorList.toArray(new DocStyleAnchor[anchorList.size()]));
+			this.anchorPageId = Integer.parseInt(this.paramList.getSetting("layout.coverPageCount", "0"));
 		}
 		Properties toProperties() {
 			return this.paramList.toProperties();

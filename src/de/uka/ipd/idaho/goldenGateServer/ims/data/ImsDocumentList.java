@@ -51,7 +51,7 @@ import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateImsConstants;
 import de.uka.ipd.idaho.stringUtils.StringVector;
 
 /**
- * List of documents in a GoldenGATE DIO, implemented iterator-style for
+ * List of documents in a GoldenGATE IMS, implemented iterator-style for
  * efficiency.
  * 
  * @author sautter
