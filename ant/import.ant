@@ -5,7 +5,7 @@
 -->
 
 <project name="import">
-	<target name="fetch" depends="fetch-su,fetch-hxu,fetch-gamta,fetch-eio,fetch-iclibs,fetch-im,fetch-gg,fetch-ggi" />
+	<target name="fetch" depends="fetch-su,fetch-hxu,fetch-gamta,fetch-eio,fetch-iclibs,fetch-im,fetch-gg,fetch-ggs,fetch-ggi" />
 	
 	
 	<target name="check-fetch-su" unless="su.exists">
@@ -50,6 +50,13 @@
 	</target>
 	<target name="fetch-gg" depends="check-fetch-gg" if="${gg.exists}">
     	<copy file="../goldengate-editor/dist/GoldenGATE.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+	</target>
+	
+	<target name="check-fetch-ggs" unless="ggs.exists">
+		<available property="ggs.exists" file="../goldengate-server/dist/GgServer.jar"/>
+	</target>
+	<target name="fetch-ggs" depends="check-fetch-ggs" if="${ggs.exists}">
+    	<copy file="../goldengate-server/dist/GgServer.jar" todir="${lib.home}" overwrite="true" verbose="false" />
 	</target>
 	
 	<target name="check-fetch-ggi" unless="ggi.exists">

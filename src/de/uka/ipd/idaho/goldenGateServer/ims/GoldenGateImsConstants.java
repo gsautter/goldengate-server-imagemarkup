@@ -29,7 +29,7 @@ package de.uka.ipd.idaho.goldenGateServer.ims;
 
 import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
 import de.uka.ipd.idaho.goldenGateServer.GoldenGateServerConstants;
-import de.uka.ipd.idaho.im.ImDocument;
+import de.uka.ipd.idaho.im.util.ImDocumentData;
 
 /**
  * Constant bearer for GoldenGATE Image Markup Storage facility.
@@ -186,13 +186,18 @@ public interface GoldenGateImsConstants extends GoldenGateServerConstants, Imagi
 		/** The ID of the document affected by the event */
 		public final String documentId;
 		
+//		/**
+//		 * The document affected by the event, null for deletion events. This
+//		 * document is strictly read-only, any attempt of modification will
+//		 * result in a RuntimException being thrown.
+//		 */
+//		public final ImDocument document;
 		/**
-		 * The document affected by the event, null for deletion events. This
-		 * document is strictly read-only, any attempt of modification will
-		 * result in a RuntimException being thrown.
+		 * The data of document affected by the event, null for deletion events.
+		 * This document data is strictly read-only, any attempt of modification
+		 * will result in a RuntimException being thrown.
 		 */
-		public final ImDocument document;
-		//	TODO consider using ImsDocumentData instead (more efficient !!!)
+		public final ImDocumentData documentData;
 		
 		/**
 		 * The current version number of the document affected by this event, -1
@@ -200,19 +205,33 @@ public interface GoldenGateImsConstants extends GoldenGateServerConstants, Imagi
 		 */
 		public final int version;
 		
+//		/**
+//		 * Constructor for update events
+//		 * @param user the name of the user who caused the event
+//		 * @param documentId the ID of the document that was updated
+//		 * @param document the actual document that was updated
+//		 * @param version the current version number of the document (after the
+//		 *            update)
+//		 * @param sourceClassName the class name of the component issuing the event
+//		 * @param logger a DocumentStorageLogger to collect log messages while the
+//		 *            event is being processed in listeners
+//		 */
+//		public ImsDocumentEvent(String user, String documentId, ImDocument document, int version, String sourceClassName, long eventTime, EventLogger logger) {
+//			this(user, documentId, document, version, UPDATE_TYPE, sourceClassName, eventTime, logger);
+//		}
 		/**
 		 * Constructor for update events
 		 * @param user the name of the user who caused the event
 		 * @param documentId the ID of the document that was updated
-		 * @param document the actual document that was updated
+		 * @param documentData the data of the document that was updated
 		 * @param version the current version number of the document (after the
 		 *            update)
 		 * @param sourceClassName the class name of the component issuing the event
 		 * @param logger a DocumentStorageLogger to collect log messages while the
 		 *            event is being processed in listeners
 		 */
-		public ImsDocumentEvent(String user, String documentId, ImDocument document, int version, String sourceClassName, long eventTime, EventLogger logger) {
-			this(user, documentId, document, version, UPDATE_TYPE, sourceClassName, eventTime, logger);
+		public ImsDocumentEvent(String user, String documentId, ImDocumentData documentData, int version, String sourceClassName, long eventTime, EventLogger logger) {
+			this(user, documentId, documentData, version, UPDATE_TYPE, sourceClassName, eventTime, logger);
 		}
 		
 		/**
@@ -226,12 +245,32 @@ public interface GoldenGateImsConstants extends GoldenGateServerConstants, Imagi
 		public ImsDocumentEvent(String user, String documentId, String sourceClassName, long eventTime, EventLogger logger) {
 			this(user, documentId, null, -1, DELETE_TYPE, sourceClassName, eventTime, logger);
 		}
+//		
+//		/**
+//		 * Constructor for custom-type events
+//		 * @param user the name of the user who caused the event
+//		 * @param documentId the ID of the document that was updated
+//		 * @param document the actual document that was updated
+//		 * @param version the current version number of the document (after the
+//		 *            update)
+//		 * @param sourceClassName the class name of the component issuing the event
+//		 * @param logger a DocumentStorageLogger to collect log messages while the
+//		 *            event is being processed in listeners
+//		 * @param type the event type (used for dispatching)
+//		 */
+//		public ImsDocumentEvent(String user, String documentId, ImDocument document, int version, int type, String sourceClassName, long eventTime, EventLogger logger) {
+//			super(type, sourceClassName, eventTime, (documentId + "-" + eventTime), logger);
+//			this.user = user;
+//			this.documentId = documentId;
+//			this.document = document;
+//			this.version = version;
+//		}
 		
 		/**
 		 * Constructor for custom-type events
 		 * @param user the name of the user who caused the event
 		 * @param documentId the ID of the document that was updated
-		 * @param document the actual document that was updated
+		 * @param documentData the data of the document that was updated
 		 * @param version the current version number of the document (after the
 		 *            update)
 		 * @param sourceClassName the class name of the component issuing the event
@@ -239,11 +278,11 @@ public interface GoldenGateImsConstants extends GoldenGateServerConstants, Imagi
 		 *            event is being processed in listeners
 		 * @param type the event type (used for dispatching)
 		 */
-		public ImsDocumentEvent(String user, String documentId, ImDocument document, int version, int type, String sourceClassName, long eventTime, EventLogger logger) {
+		public ImsDocumentEvent(String user, String documentId, ImDocumentData documentData, int version, int type, String sourceClassName, long eventTime, EventLogger logger) {
 			super(type, sourceClassName, eventTime, (documentId + "-" + eventTime), logger);
 			this.user = user;
 			this.documentId = documentId;
-			this.document = document;
+			this.documentData = documentData;
 			this.version = version;
 		}
 		

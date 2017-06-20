@@ -48,6 +48,8 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedList;
 
+import de.uka.ipd.idaho.easyIO.streams.PeekInputStream;
+import de.uka.ipd.idaho.gamta.AnnotationUtils;
 import de.uka.ipd.idaho.gamta.AttributeUtils;
 import de.uka.ipd.idaho.gamta.Attributed;
 import de.uka.ipd.idaho.gamta.Gamta;
@@ -254,6 +256,7 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 			error.printStackTrace(System.out);
 
 			//	clean up cached data file
+			//	TODO really delete on error?
 			if (this.deleteDataFile && (this.dataFile != null)) {
 				this.dataFile.delete();
 				this.dataFile = null;
@@ -273,6 +276,42 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 		public int hashCode() {
 			return this.toString().hashCode();
 		}
+	}
+	
+	private static final byte[] PDF_FILE_SIGNATURE = {((byte) '%'), ((byte) 'P'), ((byte) 'D'), ((byte) 'F')}; // OK with letters, they are all basic ASCII
+	private static final String PDF_MIME_TYPE = "application/pdf";
+	
+	private static final byte[] ZIP_FILE_SIGNATURE = {((byte) 'P'), ((byte) 'K'), ((byte) 3), ((byte) 4)}; // OK with letters, they are all basic ASCII
+	private static final String IMF_MIME_TYPE = "application/imf"; // this one doesn't really exist, but it's OK for internal use
+	
+	/* read first 16 or so bytes to determine file MIME type (https://en.wikipedia.org/wiki/List_of_file_signatures):
+	 * - '%PDF' --> application/pdf
+	 * - 'PK<EXT><EOT>' --> application/zip (IMF)
+	 */
+	private static String determineMimeType(File file) throws IOException {
+		PeekInputStream lookahead = new PeekInputStream(new FileInputStream(file), 16);
+		try {
+			if (lookahead.startsWith(PDF_FILE_SIGNATURE))
+				return PDF_MIME_TYPE;
+			else if (lookahead.startsWith(ZIP_FILE_SIGNATURE))
+				return IMF_MIME_TYPE;
+			else return null;
+		}
+		finally {
+			lookahead.close();
+		}
+	}
+	
+	private static Attributed readAttributes(String[] arguments, int fromIndex) {
+		Attributed attributes = new AbstractAttributed();
+		for (int a = fromIndex; a < arguments.length; a++) {
+			if (arguments[a].indexOf('=') == -1)
+				continue;
+			String[] avPair = arguments[a].trim().split("\\s*\\=\\s*", 2);
+			if ((avPair.length == 2) && AnnotationUtils.isValidAnnotationType(avPair[0]))
+				attributes.setAttribute(avPair[0], avPair[1]);
+		}
+		return attributes;
 	}
 	
 	private GoldenGateIMS ims;
@@ -403,6 +442,7 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 						importer.setDataPath(dataPath);
 						importer.setWorkingFolder(workingFolder);
 						importer.setCacheFolder(cacheFolder);
+						importer.setParent(GoldenGateIMI.this);
 						importer.setHost(GoldenGateIMI.this.host);
 						importer.init();
 						System.out.println(" - importer " + importer.getName() + " initialized");
@@ -502,31 +542,144 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 		ArrayList cal = new ArrayList();
 		ComponentAction ca;
 		
-		//	schedule URL import (good for testing)
+		//	schedule import from URL, file, or folder (good for testing, and for trouble shooting)
 		ca = new ComponentActionConsole() {
 			public String getActionCommand() {
 				return IMPORT_DOCUMENT_COMMAND;
 			}
 			public String[] getExplanation() {
 				String[] explanation = {
-						IMPORT_DOCUMENT_COMMAND + " <documentUrl> <documentMimeType>",
-						"Import a document from a URL:",
-						"- <documentUrl>: The URL to import the document from",
-						"- <documentMimeType>: The MIME type of the document (optional, defaults to 'application/pdf')"
+						IMPORT_DOCUMENT_COMMAND + " <documentPath> <documentMimeType> <attribute>=<value> ...",
+						"Import a document from a file, folder, or URL:",
+						"- <documentPath>: The file, folder, or URL to import the document from",
+						"- <documentMimeType>: The MIME type of the document (optional, defaults to 'application/pdf' for URLs and is determined automatically for local files)",
+						"- <attribute>=<value>: An attribute-value pair to set for the document (there can be no or any number of such pairs)"
 					};
 				return explanation;
 			}
-			public void performActionConsole(String[] arguments) {
-				try {
-					if (arguments.length == 1)
-						scheduleImport("application/pdf", new URL(arguments[0]), null);
-					else if (arguments.length == 2)
-						scheduleImport(arguments[1], new URL(arguments[0]), null);
-					else System.out.println(" Invalid arguments for '" + this.getActionCommand() + "', specify the document URL and MIME type as the only arguments.");
+			public void performActionConsole(final String[] arguments) {
+				if (arguments.length == 0) {
+					System.out.println(" Invalid arguments for '" + this.getActionCommand() + "', specify at least the document URL and MIME type.");
+					return;
 				}
-				catch (MalformedURLException mue) {
-					System.out.println(" '" + arguments[0] + "' is not a valid URL.");
+				
+				//	import from file
+				if (arguments[0].indexOf("://") == -1) {
+					
+					//	check file
+					final File docFile = new File(arguments[0]);
+					if (!docFile.exists()) {
+						System.out.println(" Invalid document file or folder '" + docFile.getAbsolutePath() + "', specify the absolute path.");
+						return;
+					}
+					
+					//	IM Directory
+					if (docFile.isDirectory()) {
+						File docEntryFile = new File(docFile, "entries.txt");
+						if (!docEntryFile.exists()) {
+							System.out.println(" Invalid document folder '" + docFile.getAbsolutePath() + "', 'entries.txt' entry list file not found.");
+							return;
+						}
+						
+						//	import document in separate thread
+						Thread importer = new Thread("LocalDocumentImportIMD") {
+							public void run() {
+								try {
+									storeDocument(docFile, readAttributes(arguments, 1));
+								}
+								catch (IOException ioe) {
+									System.out.println("Error storing document imported from " + docFile.getName() + ": " + ioe.getMessage());
+									ioe.printStackTrace(System.out);
+								}
+							}
+						};
+						System.out.println(" Starting document import from folder '" + docFile.getAbsolutePath() + "'");
+						importer.start();
+					}
+					
+					//	other file
+					else try {
+						
+						//	determine MIME type
+						final String mimeType;
+						final int attributeStart;
+						if ((arguments.length >= 2) && arguments[1].matches("[a-z]+\\/[a-z\\-\\+]+")) {
+							mimeType = arguments[1];
+							attributeStart = 2;
+						}
+						else {
+							mimeType = determineMimeType(docFile);
+							attributeStart = 1;
+						}
+						
+						//	import IMF in separate thread
+						if (IMF_MIME_TYPE.equals(mimeType)) {
+							Thread importer = new Thread("LocalDocumentImportIMF") {
+								public void run() {
+									try {
+										storeDocument(docFile, readAttributes(arguments, attributeStart));
+									}
+									catch (IOException ioe) {
+										System.out.println("Error storing document imported from " + docFile.getName() + ": " + ioe.getMessage());
+										ioe.printStackTrace(System.out);
+									}
+								}
+							};
+							System.out.println(" Starting document import from file '" + docFile.getAbsolutePath() + "'");
+							importer.start();
+						}
+						
+						//	schedule other imports in normal queue
+						else if (mimeType == null) {
+							System.out.println(" Could not determine MIME type of '" + docFile.getAbsolutePath() + "', please specify explicitly in arguments.");
+							return;
+						}
+						
+						//	schedule other imports in normal queue
+						else scheduleImport(mimeType, docFile, readAttributes(arguments, attributeStart));
+					}
+					catch (IOException ioe) {
+						System.out.println("Error importing document from " + docFile.getName() + ": " + ioe.getMessage());
+						ioe.printStackTrace(System.out);
+					}
 				}
+				
+				//	schedule import from URL
+				else {
+					
+					//	determine MIME type
+					String mimeType;
+					int attributeStart;
+					if ((arguments.length >= 2) && arguments[1].matches("[a-z]+\\/[a-z\\-\\+]+")) {
+						mimeType = arguments[1];
+						attributeStart = 2;
+					}
+					else {
+						mimeType = PDF_MIME_TYPE;
+						attributeStart = 1;
+					}
+					try {
+						scheduleImport(mimeType, new URL(arguments[0]), readAttributes(arguments, attributeStart));
+					}
+					catch (MalformedURLException mue) {
+						System.out.println(" '" + arguments[0] + "' is not a valid URL.");
+					}
+				}
+			}
+			
+			private void storeDocument(File docFile, Attributed attributes) throws IOException {
+				
+				//	load document TODO when importing IMF, use cache folder to ease resource consumption
+				ImDocument doc = ImDocumentIO.loadDocument(docFile);
+				
+				//	set document attributes
+				AttributeUtils.copyAttributes(attributes, doc, AttributeUtils.ADD_ATTRIBUTE_COPY_MODE);
+				
+				//	get user name to credit (if any)
+				String userName = ((String) attributes.getAttribute(GoldenGateIMS.CHECKIN_USER_ATTRIBUTE, defaultImportUserName));
+				
+				//	store document in IMS
+				ims.uploadDocument(userName, doc, null);
 			}
 		};
 		cal.add(ca);
@@ -799,6 +952,17 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 		this.enqueueImport(idi);
 	}
 	
+	/**
+	 * Check if a document with a give ID already exists. This method helps
+	 * importers to check whether or not some document has been imported
+	 * before.
+	 * @param docId the document ID to check
+	 * @return true if a document with the argument ID exists
+	 */
+	public boolean checkDocumentExists(String docId) {
+		return (this.ims.getDocumentVersionHistory(docId) != null);
+	}
+	
 	private LinkedList importQueue = new LinkedList() {
 		private HashSet deduplicator = new HashSet();
 		public Object removeFirst() {
@@ -873,21 +1037,4 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 			}
 		}
 	}
-//	
-//	private static MessageDigest checksumDigester = null;
-//	private static synchronized String computeDocumentID(byte[] pdfBytes) {
-//		if (checksumDigester == null) {
-//			try {
-//				checksumDigester = MessageDigest.getInstance("MD5");
-//			}
-//			catch (NoSuchAlgorithmException nsae) {
-//				System.out.println(nsae.getClass().getName() + " (" + nsae.getMessage() + ") while creating checksum digester.");
-//				nsae.printStackTrace(System.out); // should not happen, but Java don't know ...
-//				return Gamta.getAnnotationID(); // use random value to avoid collisions
-//			}
-//		}
-//		checksumDigester.reset();
-//		checksumDigester.update(pdfBytes);
-//		return new String(RandomByteSource.getHexCode(checksumDigester.digest()));
-//	}
 }

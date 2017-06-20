@@ -28,14 +28,11 @@
 package de.uka.ipd.idaho.goldenGateServer.imi.importers;
 
 import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintStream;
 import java.util.HashMap;
@@ -54,6 +51,7 @@ import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.ImSupplement;
 import de.uka.ipd.idaho.im.pdf.PdfExtractor;
 import de.uka.ipd.idaho.im.util.ImDocumentIO;
+import de.uka.ipd.idaho.im.util.ImSupplementCache;
 
 /**
  * Stripped-down copy of Image Markup's generic PDF importer command line tool,
@@ -63,7 +61,7 @@ import de.uka.ipd.idaho.im.util.ImDocumentIO;
  * @author sautter
  */
 public class PdfImporterSlave {
-	private static final int maxInMemoryImageSupplementBytes = (50 * 1024 * 1024); // 50 MB
+	private static final int maxInMemorySupplementBytes = (50 * 1024 * 1024); // 50 MB
 	
 	public static void main(String[] args) throws Exception {
 		
@@ -276,112 +274,18 @@ public class PdfImporterSlave {
 	}
 	
 	private static class PisImDocument extends ImDocument {
-		private File supplementFolder;
+		private ImSupplementCache supplementCache;
 		PisImDocument(String docId, File supplementFolder) {
 			super(docId);
-			this.supplementFolder = supplementFolder;
+			this.supplementCache = new ImSupplementCache(this, supplementFolder, maxInMemorySupplementBytes);
 		}
-		
-		private long inMemorySupplementBytes = 0;
 		public ImSupplement addSupplement(ImSupplement ims) {
-			
-			//	store known type supplements on disc if there are too many or too large
-			if ((ims instanceof ImSupplement.Figure) || (ims instanceof ImSupplement.Scan) || (ims instanceof ImSupplement.Source)) try {
-				
-				//	threshold already exceeded, disc cache right away
-				if (this.inMemorySupplementBytes > maxInMemoryImageSupplementBytes)
-					ims = this.createDiscSupplement(ims, null);
-				
-				//	still below threshold, check source
-				else {
-					InputStream sis = ims.getInputStream();
-					
-					//	this one resides in memory, count it
-					if (sis instanceof ByteArrayInputStream)
-						this.inMemorySupplementBytes += sis.available();
-					
-					//	threshold just exceeded
-					if (this.inMemorySupplementBytes > maxInMemoryImageSupplementBytes) {
-						
-						//	disc cache all existing image supplements
-						ImSupplement[] imss = this.getSupplements();
-						for (int s = 0; s < imss.length; s++) {
-							if ((imss[s] instanceof ImSupplement.Figure) || (imss[s] instanceof ImSupplement.Scan))
-								super.addSupplement(this.createDiscSupplement(imss[s], null));
-						}
-						
-						//	disc cache argument supplement
-						ims = this.createDiscSupplement(ims, sis);
-					}
-				}
-			}
-			catch (IOException ioe) {
-				System.out.println("Error caching supplement '" + ims.getId() + "': " + ioe.getMessage());
-				ioe.printStackTrace(System.out);
-			}
-			
-			//	store (possibly modified) supplement
+			ims = this.supplementCache.cacheSupplement(ims);
 			return super.addSupplement(ims);
 		}
-		
-		private ImSupplement createDiscSupplement(ImSupplement ims, InputStream sis) throws IOException {
-			
-			//	get input stream if not already done
-			if (sis == null)
-				sis = ims.getInputStream();
-			
-			//	this one's not in memory, close input stream and we're done
-			if (!(sis instanceof ByteArrayInputStream)) {
-				sis.close();
-				return ims;
-			}
-			
-			//	get file name and extension
-			String sDataName = ims.getId().replaceAll("[^a-zA-Z0-9]", "_");
-			String sDataType = ims.getMimeType();
-			if (sDataType.indexOf('/') != -1)
-				sDataType = sDataType.substring(sDataType.indexOf('/') + "/".length());
-			
-			//	create file
-			final File sFile = new File(supplementFolder, (this.docId + "." + sDataName + "." + sDataType));
-			
-			//	store supplement in file (if not done in previous run)
-			if (!sFile.exists()) {
-				sFile.createNewFile();
-				OutputStream sos = new BufferedOutputStream(new FileOutputStream(sFile));
-				byte[] sBuffer = new byte[1024];
-				for (int r; (r = sis.read(sBuffer, 0, sBuffer.length)) != -1;)
-					sos.write(sBuffer, 0, r);
-				sos.flush();
-				sos.close();
-			}
-			
-			//	replace supplement with disc based one
-			if (ims instanceof ImSupplement.Figure)
-				return new ImSupplement.Figure(this, ims.getMimeType(), ((ImSupplement.Figure) ims).getPageId(), ((ImSupplement.Figure) ims).getRenderOrderNumber(), ((ImSupplement.Figure) ims).getDpi(), ((ImSupplement.Figure) ims).getBounds()) {
-					public InputStream getInputStream() throws IOException {
-						return new BufferedInputStream(new FileInputStream(sFile));
-					}
-				};
-			else if (ims instanceof ImSupplement.Graphics)
-				return new ImSupplement.Graphics(this, ((ImSupplement.Graphics) ims).getPageId(), ((ImSupplement.Graphics) ims).getRenderOrderNumber(), ((ImSupplement.Graphics) ims).getBounds()) {
-					public InputStream getInputStream() throws IOException {
-						return new BufferedInputStream(new FileInputStream(sFile));
-					}
-				};
-			else if (ims instanceof ImSupplement.Scan)
-				return new ImSupplement.Scan(this, ims.getMimeType(), ((ImSupplement.Scan) ims).getPageId(), ((ImSupplement.Scan) ims).getRenderOrderNumber(), ((ImSupplement.Scan) ims).getDpi()) {
-					public InputStream getInputStream() throws IOException {
-						return new BufferedInputStream(new FileInputStream(sFile));
-					}
-				};
-			else if (ims instanceof ImSupplement.Source)
-				return new ImSupplement.Source(this, ims.getMimeType()) {
-					public InputStream getInputStream() throws IOException {
-						return new BufferedInputStream(new FileInputStream(sFile));
-					}
-				};
-			else return ims; // never gonna happen, but Java don't know
+		public void removeSupplement(ImSupplement ims) {
+			this.supplementCache.deleteSupplement(ims);
+			super.removeSupplement(ims);
 		}
 	}
 	

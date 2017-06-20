@@ -47,6 +47,9 @@ public abstract class ImiDocumentImporter {
 	 * done in the working folder. */
 	protected File dataPath;
 	
+	/** the component's parent IMI, providing access to checks */
+	protected GoldenGateIMI parent;
+	
 	/** the component's host, providing access to the shared database */
 	protected GoldenGateServerComponentHost host;
 	
@@ -85,6 +88,14 @@ public abstract class ImiDocumentImporter {
 	 */
 	public int getPrority() {
 		return 0;
+	}
+	
+	/**
+	 * Set the parent IMI, providing access to check methods, etc.
+	 * @param parent the parent
+	 */
+	public void setParent(GoldenGateIMI parent) {
+		this.parent = parent;
 	}
 	
 	/**

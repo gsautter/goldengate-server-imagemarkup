@@ -63,6 +63,8 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 	private static final String CONFIG_HOST_PARAMETER = "CONFHOST";
 	private static final String CONFIG_NAME_PARAMETER = "CONFNAME";
 	private static final String TOOL_SEQUENCE_PARAMETER = "TOOLS";
+	private static final String WAIVE_DOCUMENT_SYTLE_PARAMETER = "WAIVEDS";
+	private static final String VERBOSE_PARAMETER = "VERBOSE";
 	private static final String USE_SINGLE_CORE_PARAMETER = "SINGLECORE";
 	
 	/**	the main method to run GoldenGATE Imagine as a batch application
@@ -76,6 +78,8 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 		String ggiConfigHost = null;
 		String ggiConfigName = null;
 		String imtNameString = null;
+		boolean requireDocStyle = true;
+		boolean silenceSystemOut = true;
 		boolean useSingleCpuCore = false;
 		
 		//	parse remaining args
@@ -92,6 +96,10 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 				ggiConfigName = args[a].substring((CONFIG_NAME_PARAMETER + "=").length());
 			else if (args[a].startsWith(TOOL_SEQUENCE_PARAMETER + "="))
 				imtNameString = args[a].substring((TOOL_SEQUENCE_PARAMETER + "=").length());
+			else if (WAIVE_DOCUMENT_SYTLE_PARAMETER.equals(args[a]))
+				requireDocStyle = false;
+			else if (VERBOSE_PARAMETER.equals(args[a]))
+				silenceSystemOut = false;
 			else if (USE_SINGLE_CORE_PARAMETER.equals(args[a]))
 				useSingleCpuCore = true;
 		}
@@ -123,9 +131,10 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 		};
 		
 		//	silence System.out
-		System.setOut(new PrintStream(new OutputStream() {
-			public void write(int b) throws IOException {}
-		}));
+		if (silenceSystemOut)
+			System.setOut(new PrintStream(new OutputStream() {
+				public void write(int b) throws IOException {}
+			}));
 		
 		//	get list of image markup tools to run
 		if (imtNameString == null) {
@@ -191,11 +200,13 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 			ImDocument doc = ImDocumentIO.loadDocument(docData, pm);
 			
 			//	test if document style detected
-			if (DocumentStyle.getStyleFor(doc) == null) {
-				sysOut.println(" - unable to assign document style");
-				return;
+			if (requireDocStyle) {
+				if (DocumentStyle.getStyleFor(doc) == null) {
+					sysOut.println(" - unable to assign document style");
+					return;
+				}
+				else sysOut.println(" - assigned document style '" + ((String) doc.getAttribute(DocumentStyle.DOCUMENT_STYLE_NAME_ATTRIBUTE)) + "'");
 			}
-			else sysOut.println(" - assigned document style '" + ((String) doc.getAttribute(DocumentStyle.DOCUMENT_STYLE_NAME_ATTRIBUTE)) + "'");
 			
 			//	process document
 			for (int t = 0; t < imts.length; t++) {

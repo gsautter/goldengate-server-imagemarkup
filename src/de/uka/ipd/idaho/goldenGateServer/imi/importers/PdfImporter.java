@@ -37,8 +37,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 
 import de.uka.ipd.idaho.easyIO.settings.Settings;
+import de.uka.ipd.idaho.easyIO.util.RandomByteSource;
+import de.uka.ipd.idaho.gamta.Gamta;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
 import de.uka.ipd.idaho.goldenGateServer.imi.GoldenGateIMI.ImiDocumentImport;
 import de.uka.ipd.idaho.goldenGateServer.imi.ImiDocumentImporter;
@@ -209,6 +213,21 @@ public class PdfImporter extends ImiDocumentImporter {
 		//	get document source file
 		File docInFile = idi.getDataFile();
 		
+		//	hash input file first to check whether or not all the decoding hassle makes sense
+		String docInFileHash = null;
+		boolean docExists = false;
+		try {
+			docInFileHash = this.getDocInFileChecksum(docInFile);
+			if (this.parent.checkDocumentExists(docInFileHash))
+				docExists = true;
+		}
+		catch (IOException ioe) {
+			System.out.println("Error computing hash of import file '" + docInFile.getAbsolutePath() + "': " + ioe.getMessage());
+			ioe.printStackTrace(System.out);
+		}
+		if (docExists)
+			throw new IOException("Document '" + docInFileHash + "' imported before.");
+		
 		//	check if we know born-digital or scanned (assume meta pages in the latter case for good measures)
 		String bornDigital = ((String) idi.removeAttribute("isBornDigital"));
 		String pdfType = "G";
@@ -221,7 +240,7 @@ public class PdfImporter extends ImiDocumentImporter {
 		StringVector command = new StringVector();
 		command.addElement("java");
 		command.addElement("-jar");
-		command.addElement("-Xmx1024m");
+		command.addElement("-Xmx2048m");
 		command.addElement("PdfImporter.jar");
 		
 		//	add parameters
@@ -296,6 +315,29 @@ public class PdfImporter extends ImiDocumentImporter {
 		//	clean up cache and document data
 		this.cleanupFile(docCacheFolder);
 		this.cleanupFile(docOutFolder);
+	}
+	
+	private MessageDigest checksumDigester = null;
+	private synchronized String getDocInFileChecksum(File docInFile) throws IOException {
+		if (this.checksumDigester == null) {
+			try {
+				this.checksumDigester = MessageDigest.getInstance("MD5");
+			}
+			catch (NoSuchAlgorithmException nsae) {
+				System.out.println(nsae.getClass().getName() + " (" + nsae.getMessage() + ") while creating checksum digester.");
+				nsae.printStackTrace(System.out); // should not happen, but Java don't know ...
+				return Gamta.getAnnotationID(); // use random value to avoid collisions
+			}
+		}
+		this.checksumDigester.reset();
+		InputStream docInFileIn = new BufferedInputStream(new FileInputStream(docInFile));
+		byte[] buffer = new byte[1024];
+		for (int r; (r = docInFileIn.read(buffer, 0, buffer.length)) != -1;)
+			this.checksumDigester.update(buffer, 0, r);
+		docInFileIn.close();
+		byte[] checksumBytes = checksumDigester.digest();
+		String checksum = new String(RandomByteSource.getHexCode(checksumBytes));
+		return checksum;
 	}
 	
 	private void cleanupFile(File file) {

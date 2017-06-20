@@ -43,6 +43,7 @@ import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.Set;
 
+import de.uka.ipd.idaho.gamta.Attributed;
 import de.uka.ipd.idaho.gamta.util.imaging.DocumentStyle;
 import de.uka.ipd.idaho.goldenGateServer.AbstractGoldenGateServerComponent;
 import de.uka.ipd.idaho.goldenGateServer.GoldenGateServerConstants.GoldenGateServerEvent.EventLogger;
@@ -215,36 +216,48 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		
 		//	establish connection to catch local updates
 		this.ims.addDocumentEventListener(new ImsDocumentEventListener() {
-			public void documentCheckedOut(ImsDocumentEvent dse) {}
-			public void documentUpdated(ImsDocumentEvent dse) {
-				if (!dse.sourceClassName.equals(GoldenGateIMS.class.getName()))
+			public void documentCheckedOut(ImsDocumentEvent ide) {}
+			public void documentUpdated(ImsDocumentEvent ide) {
+				if (!ide.sourceClassName.equals(GoldenGateIMS.class.getName()))
 					return;
-				System.out.println("GoldenGATE IMP: checking whether or not to process document " + dse.document.getAttribute(ImDocument.DOCUMENT_NAME_ATTRIBUTE, dse.documentId));
+				Attributed docAttributes = ide.documentData.getDocumentAttributes();
+				System.out.println("GoldenGATE IMP: checking whether or not to process document " + docAttributes.getAttribute(ImDocument.DOCUMENT_NAME_ATTRIBUTE, ide.documentId));
 				
 				//	let's not loop back on our own updates
-				if (updateUserName.equals(dse.user)) {
+				if (updateUserName.equals(ide.user)) {
 					System.out.println(" ==> self-triggered update");
 					return;
 				}
 				
 				//	only process documents that have not been worked on yet
-				ImAnnotation[] docAnnots = dse.document.getAnnotations();
+				ImAnnotation[] docAnnots = ide.documentData.getAnnotations();
 				if (docAnnots.length != 0) {
 					System.out.println(" ==> there are already annotations");
-					imsUpdatedDocIDs.remove(dse.documentId);
+					imsUpdatedDocIDs.remove(ide.documentId);
+					return;
+				}
+				
+				//	load document proper only now
+				ImDocument doc;
+				try {
+					doc = ide.documentData.getDocument();
+				}
+				catch (IOException ioe) {
+					ide.writeLog("Could not investigate document: " + ioe.getMessage());
+					ioe.printStackTrace(System.out);
 					return;
 				}
 				
 				//	test if we have a document style template
-				DocumentStyle docStyle = DocumentStyle.getStyleFor(dse.document);
+				DocumentStyle docStyle = DocumentStyle.getStyleFor(doc);
 				if (docStyle.isEmpty()) {
 					System.out.println(" ==> document style template not found");
-					imsUpdatedDocIDs.remove(dse.documentId);
+					imsUpdatedDocIDs.remove(ide.documentId);
 					return;
 				}
 				
 				//	schedule processing document
-				imsUpdatedDocIDs.add(dse.documentId);
+				imsUpdatedDocIDs.add(ide.documentId);
 				System.out.println(" ==> processing scheduled");
 			}
 			public void documentDeleted(ImsDocumentEvent dse) {}
@@ -252,13 +265,13 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 				if (!dse.sourceClassName.equals(GoldenGateIMS.class.getName()))
 					return;
 				if (imsUpdatedDocIDs.remove(dse.documentId))
-					scheduleBatchRun(dse.documentId);
+					scheduleBatchRun(new BatchRunRequest(dse.documentId));
 			}
 		});
 		
 		//	start processing handler thread
-		Thread importerThread = new BatchRunnerThread();
-		importerThread.start();
+		Thread batchRunner = new BatchRunnerThread();
+		batchRunner.start();
 	}
 	
 	private Set imsUpdatedDocIDs = Collections.synchronizedSet(new HashSet());
@@ -286,6 +299,8 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		ArrayList cal = new ArrayList();
 		ComponentAction ca;
 		
+		//	TODO add command listing available document processors
+		
 		//	schedule URL import (good for testing)
 		ca = new ComponentActionConsole() {
 			public String getActionCommand() {
@@ -293,16 +308,25 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 			}
 			public String[] getExplanation() {
 				String[] explanation = {
-						PROCESS_DOCUMENT_COMMAND + " <documentId>",
+						PROCESS_DOCUMENT_COMMAND + " <documentId> <toolName> <waiveStyle>",
 						"Schedule a document for batch processing:",
-						"- <documentId>: The ID of the document to process"
+						"- <documentId>: The ID of the document to process",
+						"- <toolName>: The name of a single Image Markup Tool to run (optional, defaults to whole configured batch)",
+						"- <waiveStyle>: Set to '-wds' to run without a document style template available (optional, only valid if <toolName> specified as well)",
+						"- <verbose>: Set to '-v' to transmit full output (optional, only valid if <toolName> specified as well)"
 					};
 				return explanation;
 			}
 			public void performActionConsole(String[] arguments) {
 				if (arguments.length == 1)
-					scheduleBatchRun(arguments[0]);
-				else System.out.println(" Invalid arguments for '" + this.getActionCommand() + "', specify the document ID as the only argument.");
+					scheduleBatchRun(new BatchRunRequest(arguments[0]));
+				else if (arguments.length == 2)
+					scheduleBatchRun(new BatchRunRequest(arguments[0], arguments[1], false, false));
+				else if (arguments.length == 3)
+					scheduleBatchRun(new BatchRunRequest(arguments[0], arguments[1], "-wds".equals(arguments[2]), "-v".equals(arguments[2])));
+				else if (arguments.length == 4)
+					scheduleBatchRun(new BatchRunRequest(arguments[0], arguments[1], ("-wds".equals(arguments[2]) || "-wds".equals(arguments[3])), ("-v".equals(arguments[2]) || "-v".equals(arguments[3]))));
+				else System.out.println(" Invalid arguments for '" + this.getActionCommand() + "', specify the document ID, markup tool name, document style waiver, and verbosity as the only arguments.");
 			}
 		};
 		cal.add(ca);
@@ -331,8 +355,20 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		return ((ComponentAction[]) cal.toArray(new ComponentAction[cal.size()]));
 	}
 	
-	private void scheduleBatchRun(String docId) {
-		this.enqueueBatchRun(docId);
+	private static class BatchRunRequest {
+		final String documentId;
+		final String imtName;
+		final boolean waiveStyle;
+		final boolean verbose;
+		BatchRunRequest(String documentId) {
+			this(documentId, null, false, false);
+		}
+		BatchRunRequest(String documentId, String imtName, boolean waiveStyle, boolean verbose) {
+			this.documentId = documentId;
+			this.imtName = imtName;
+			this.waiveStyle = waiveStyle;
+			this.verbose = verbose;
+		}
 	}
 	
 	private LinkedList batchRunQueue = new LinkedList() {
@@ -347,18 +383,18 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 				super.addLast(e);
 		}
 	};
-	private void enqueueBatchRun(String docId) {
+	private void scheduleBatchRun(BatchRunRequest brr) {
 		synchronized (this.batchRunQueue) {
-			this.batchRunQueue.addLast(docId);
+			this.batchRunQueue.addLast(brr);
 			this.batchRunQueue.notify();
 		}
 	}
-	private String getBatchRun() {
+	private BatchRunRequest getBatchRun() {
 		synchronized (this.batchRunQueue) {
 			if (this.batchRunQueue.isEmpty()) try {
 				this.batchRunQueue.wait();
 			} catch (InterruptedException ie) {}
-			return (this.batchRunQueue.isEmpty() ? null : ((String) this.batchRunQueue.removeFirst()));
+			return (this.batchRunQueue.isEmpty() ? null : ((BatchRunRequest) this.batchRunQueue.removeFirst()));
 		}
 	}
 	
@@ -373,14 +409,15 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 			//	keep going until shutdown
 			while (true) {
 				
-				//	get next document ID to process
-				String docId = getBatchRun();
-				if (docId == null)
+				//	get next document processing request to process
+				BatchRunRequest brr = getBatchRun();
+				if (brr == null)
 					return; // only happens on shutdown
 				
 				//	process document
+				long brrStart = System.currentTimeMillis();
 				try {
-					handleBatchRun(docId);
+					handleBatchRun(brr);
 				}
 				catch (Exception e) {
 					e.printStackTrace(System.out);
@@ -388,23 +425,23 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 				
 				//	give the others a little time
 				try {
-					sleep(1000 * 5);
+					sleep(Math.max((1000 * 5), (System.currentTimeMillis() - brrStart)));
 				} catch (InterruptedException ie) {}
 			}
 		}
 	}
 	
-	private void handleBatchRun(String docId) throws IOException {
+	private void handleBatchRun(BatchRunRequest brr) throws IOException {
 		
 		//	check out document as data
-		ImsDocumentData docData = this.ims.checkoutDocumentAsData(this.updateUserName, docId);
+		ImsDocumentData docData = this.ims.checkoutDocumentAsData(this.updateUserName, brr.documentId);
 		
 		//	create document cache folder
-		File cacheFolder = new File(this.cacheFolder, ("cache-" + docId));
+		File cacheFolder = new File(this.cacheFolder, ("cache-" + brr.documentId));
 		cacheFolder.mkdirs();
 		
 		//	create document output folder
-		File docFolder = new File(this.cacheFolder, ("doc-" + docId));
+		File docFolder = new File(this.cacheFolder, ("doc-" + brr.documentId));
 		docFolder.mkdirs();
 		
 		//	copy document to cache folder (only non-binary entries)
@@ -437,7 +474,11 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		if (this.ggiConfigHost != null)
 			command.addElement("CONFHOST=" + this.ggiConfigHost); // config host (if any)
 		command.addElement("CONFNAME=" + this.ggiConfigName); // config name
-		command.addElement("TOOLS=" + this.batchImTools); // IM tools to run
+		command.addElement("TOOLS=" + ((brr.imtName == null) ? this.batchImTools : brr.imtName)); // IM tool(s) to run
+		if (brr.waiveStyle && (brr.imtName != null))
+			command.addElement("WAIVEDS"); // waive requiring document style only for single IM tool
+		if (brr.verbose && (brr.imtName != null))
+			command.addElement("VERBOSE"); // loop through all output (good for debugging)
 		command.addElement("SINGLECORE"); // run on single CPU core only (we don't want to knock out the whole server, do we?)
 		
 		//	start batch processor slave process
@@ -483,7 +524,14 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		//	copy back modified entries
 		cDocData = new FolderImDocumentData(docFolder, null);
 		ImDocumentEntry[] cDocEntries = cDocData.getEntries();
+		boolean docModified = false;
+		System.out.println("Document " + brr.documentId + " processed, copying back entries:");
 		for (int e = 0; e < cDocEntries.length; e++) {
+			ImDocumentEntry docEntry = docData.getEntry(cDocEntries[e].name);
+			if ((docEntry != null) && docEntry.dataHash.equals(cDocEntries[e].dataHash)) {
+				System.out.println(" - " + cDocEntries[e].name + " ==> unmodified");
+				continue; // this entry exists and didn't change
+			}
 			InputStream cDocEntryIn = new BufferedInputStream(cDocData.getInputStream(cDocEntries[e]));
 			OutputStream docEntryOut = new BufferedOutputStream(docData.getOutputStream(cDocEntries[e]));
 			byte[] buffer = new byte[1024];
@@ -492,15 +540,18 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 			docEntryOut.flush();
 			docEntryOut.close();
 			cDocEntryIn.close();
+			docModified = true;
+			System.out.println(" - " + cDocEntries[e].name + " ==> modified");
 		}
 		
 		//	update and release document in IMS
-		this.ims.updateDocumentFromData(this.updateUserName, this.updateUserName, docData, new EventLogger() {
-			public void writeLog(String logEntry) {
-				System.out.println(logEntry);
-			}
-		});
-		this.ims.releaseDocument(this.updateUserName, docId);
+		if (docModified)
+			this.ims.updateDocumentFromData(this.updateUserName, this.updateUserName, docData, new EventLogger() {
+				public void writeLog(String logEntry) {
+					System.out.println(logEntry);
+				}
+			});
+		this.ims.releaseDocument(this.updateUserName, brr.documentId);
 		
 		//	clean up cache and document data
 		this.cleanupFile(cacheFolder);

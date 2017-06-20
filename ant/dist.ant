@@ -8,7 +8,7 @@
 	<target name="zips" depends="backenddocszip,imsdociojar">
 	</target>
 	
-	<target name="backenddocszip" depends="imsjar,imrjar">
+	<target name="backenddocszip" depends="imsjar,imrjar,imijar,imipdfjar,imipdfslavejar,impjar,impslavejar">
 		<delete file="${pack.serverim}"/>
 		<zip destfile="${pack.serverim}">
 			<fileset dir="${dist.home}" includes="Components/**/**" />
@@ -68,6 +68,86 @@
 				<include name="**/goldenGateServer/ims/client/GoldenGateImsClient.java" />
 				<include name="**/goldenGateServer/ims/client/GoldenGateImsDocumentIO.java" />
 				<include name="**/goldenGateServer/ims/data/*.java" />
+			</fileset>
+			<fileset dir="." includes="LICENSE.txt"/>
+		</jar>
+	</target>
+	
+	<target name="imijar">
+		<delete file="${jar.imi}" />
+		<jar destfile="${jar.imi}" manifest="${file.home}/MANIFEST.components.MF">
+			<fileset dir="${build.home}/classes">
+				<include name="**/goldenGateServer/imi/*.class" />
+			</fileset>
+			<fileset dir="${src.home}">
+				<include name="**/goldenGateServer/imi/*.java" />
+			</fileset>
+			<fileset dir="." includes="LICENSE.txt"/>
+		</jar>
+	</target>
+	<target name="imipdfjar" depends="check-ggi" if="${ggi.exists}">
+		<delete file="${jar.imipdf}" />
+		<jar destfile="${jar.imipdf}" manifest="${file.home}/MANIFEST.components.MF">
+			<fileset dir="${build.home}/classes">
+				<include name="**/goldenGateServer/imi/importers/PdfImporter.class" />
+				<include name="**/goldenGateServer/imi/importers/PdfImporter$*.class" />
+			</fileset>
+			<fileset dir="${src.home}">
+				<include name="**/goldenGateServer/imi/importers/PdfImporter.java" />
+			</fileset>
+			<fileset dir="." includes="LICENSE.txt"/>
+		</jar>
+	</target>
+	<target name="imipdfslavejar" depends="check-ggi" if="${ggi.exists}">
+		<delete file="${jar.imipdfslave}" />
+		<jar destfile="${jar.imipdfslave}" manifest="${file.home}/MANIFEST.imiPdfSlave.MF">
+			<fileset dir="${build.home}/classes">
+				<include name="**/goldenGateServer/imi/importers/PdfImporterSlave.class" />
+				<include name="**/goldenGateServer/imi/importers/PdfImporterSlave$*.class" />
+			</fileset>
+			<fileset dir="${src.home}">
+				<include name="**/goldenGateServer/imi/importers/PdfImporterSlave.java" />
+			</fileset>
+			<fileset dir="." includes="LICENSE.txt"/>
+		</jar>
+	</target>
+	
+	<!--target name="imipdfjar">
+		<delete file="${jar.imipdf}" />
+		<jar destfile="${jar.imipdf}" manifest="${file.home}/MANIFEST.components.MF">
+			<fileset dir="${build.home}/classes">
+				<include name="**/goldenGateServer/imi/importers/*.class" />
+			</fileset>
+			<fileset dir="${src.home}">
+				<include name="**/goldenGateServer/imi/importers/*.java" />
+			</fileset>
+			<fileset dir="." includes="LICENSE.txt"/>
+		</jar>
+	</target-->
+	
+	<target name="impjar">
+		<delete file="${jar.imp}" />
+		<jar destfile="${jar.imp}" manifest="${file.home}/MANIFEST.components.MF">
+			<fileset dir="${build.home}/classes">
+				<include name="**/goldenGateServer/imp/*.class" />
+				<!-- include name="**/goldenGateServer/ims/util/StandaloneDocumentStyleProvider.class" / -->
+				<!-- include name="**/goldenGateServer/ims/util/StandaloneDocumentStyleProvider$*.class" / -->
+			</fileset>
+			<fileset dir="${src.home}">
+				<include name="**/goldenGateServer/imp/*.java" />
+				<!-- include name="**/goldenGateServer/ims/util/StandaloneDocumentStyleProvider.java" / -->
+			</fileset>
+			<fileset dir="." includes="LICENSE.txt"/>
+		</jar>
+	</target>
+	<target name="impslavejar" depends="check-ggi" if="${ggi.exists}">
+		<delete file="${jar.impslave}" />
+		<jar destfile="${jar.impslave}" manifest="${file.home}/MANIFEST.impSlave.MF">
+			<fileset dir="${build.home}/classes">
+				<include name="**/goldenGateServer/imp/slave/*.class" />
+			</fileset>
+			<fileset dir="${src.home}">
+				<include name="**/goldenGateServer/imp/slave/*.java" />
 			</fileset>
 			<fileset dir="." includes="LICENSE.txt"/>
 		</jar>
