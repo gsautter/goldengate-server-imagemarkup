@@ -27,11 +27,10 @@
  */
 package de.uka.ipd.idaho.goldenGateServer.ims.client;
 
-import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.ByteArrayInputStream;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FilterOutputStream;
 import java.io.IOException;
@@ -40,7 +39,11 @@ import java.io.OutputStream;
 import java.io.Reader;
 import java.net.URLEncoder;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.Properties;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -48,6 +51,7 @@ import java.util.zip.ZipOutputStream;
 
 import de.uka.ipd.idaho.gamta.util.ControllingProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
+import de.uka.ipd.idaho.gamta.util.ProgressMonitor.CascadingProgressMonitor;
 import de.uka.ipd.idaho.goldenGateServer.client.ServerConnection;
 import de.uka.ipd.idaho.goldenGateServer.client.ServerConnection.Connection;
 import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateImsConstants;
@@ -56,7 +60,9 @@ import de.uka.ipd.idaho.goldenGateServer.uaa.client.AuthenticatedClient;
 import de.uka.ipd.idaho.goldenGateServer.util.BufferedLineInputStream;
 import de.uka.ipd.idaho.goldenGateServer.util.BufferedLineOutputStream;
 import de.uka.ipd.idaho.im.ImDocument;
+import de.uka.ipd.idaho.im.ImSupplement;
 import de.uka.ipd.idaho.im.util.ImDocumentData;
+import de.uka.ipd.idaho.im.util.ImDocumentData.DataBackedImDocument;
 import de.uka.ipd.idaho.im.util.ImDocumentData.FolderImDocumentData;
 import de.uka.ipd.idaho.im.util.ImDocumentData.ImDocumentEntry;
 import de.uka.ipd.idaho.im.util.ImDocumentIO;
@@ -82,7 +88,7 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 		 * @return a document data object
 		 * @throws IOException
 		 */
-		public abstract ImDocumentData getDocumentData(String docId) throws IOException;
+		public abstract ImsClientDocumentData getDocumentData(String docId) throws IOException;
 		
 		/**
 		 * Store the entry list of a document data object. The runtime type of
@@ -91,43 +97,166 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 		 * @param docData the document data object whose entry list to store
 		 * @throws IOException
 		 */
-		public abstract void storeEntryList(ImDocumentData docData) throws IOException;
+		public abstract void storeEntryList(ImsClientDocumentData docData) throws IOException;
+	}
+	
+	/**
+	 * A filter object indicating which document entries to fetch immediately
+	 * from the backing IMS. All others are fetched only on demand. This allows
+	 * for faster initial loading of a document at the potential cost of later
+	 * data fetch request.
+	 * 
+	 * @author sautter
+	 */
+	public static interface FastFetchFilter {
+		
+		/** indicates to fetch a document entry immediately */
+		public static final int FETCH_IMMEDIATELY = 0;
+		
+		/** indicates to fetch a document entry eagerly, but deferred (in background) */
+		public static final int FETCH_DEFERRED = 1;
+		
+		/** indicates to fetch a document entry only on demand */
+		public static final int FETCH_ON_DEMAND = 2;
+		
+		/**
+		 * Indicate whether or nor to fetch the data of the argument entry
+		 * immediately, in background, or only on demand.
+		 * @param entry the entry in question
+		 * @return true if the argument entry is to be fetched immediately
+		 */
+		public abstract int getFetchMode(ImDocumentEntry entry);
 	}
 	
 	/**
 	 * Image Markup document data object loading entries on demand from a backing
 	 * GoldenGATE Image Markup Store. Once an entry is loaded, it is cached in the
-	 * document data object handed to the constructor. Entries that are updated are
-	 * first stored in that document data object as well, and only calling the
-	 * <code>pushUpdates()</code> will send the updates to the backing IMS.
+	 * document data object handed to the constructor.
 	 * 
 	 * @author sautter
 	 */
 	public static class ImsClientDocumentData extends ImDocumentData {
-		private ImDocumentData localDocData;
 		private String docId;
+		private ImDocumentData localDocData;
+		private HashSet virtualEntryNames = new HashSet();
+		
 		private GoldenGateImsClient imsClient;
+		private boolean imsStoring;
+		
+		private LinkedList backgroundFetchEntries = new LinkedList();
+		private BackgroundFetchThread backgroundFetchThread = null;
 		
 		/** Constructor
-		 * @param docId the ID of the document represented by this data object
-		 * @param entries the document entries available remotely
-		 * @param imsClient the IMS client to use for server interaction
-		 * @param localDocData the document data object to use for local storage
-		 * @throws IOException
+		 * @param docId the document ID
+		 * @param localDocData the local document data storing non-virtual entries
 		 */
-		public ImsClientDocumentData(String docId, ImDocumentEntry[] entries, GoldenGateImsClient imsClient, ImDocumentData localDocData) throws IOException {
-			this.imsClient = imsClient;
+		public ImsClientDocumentData(String docId, ImDocumentData localDocData) {
 			this.docId = docId;
 			this.localDocData = localDocData;
 			
-			//	put existing entries from local data
+			//	copy entries (automatically checks for virtual entries)
 			ImDocumentEntry[] localEntries = this.localDocData.getEntries();
 			for (int e = 0; e < localEntries.length; e++)
 				this.putEntry(localEntries[e]);
-			
-			//	put entries only second, to give priority to remote versions
-			for (int e = 0; e < entries.length; e++)
-				this.putEntry(entries[e]);
+		}
+		
+		/**
+		 * Bind the document data to a (new) IMS client, e.g. after a re-login.
+		 * @param imsClient the IMS client to use
+		 */
+		public void setImsClient(GoldenGateImsClient imsClient) {
+			this.imsClient = imsClient;
+		}
+		
+		/**
+		 * Activate or deactivate IMS storage mode. Activating IMS storage mode
+		 * ignores IO on virtual entries to prevent on-demand fetch during caching.
+		 * @param storing are we in IMS storage mode?
+		 */
+		void setImsStoring(boolean imsStoring) {
+			this.imsStoring = imsStoring;
+		}
+		
+		/**
+		 * Retrieve the wrapped local document data responsible for persisting the
+		 * non/virtual entries.
+		 * @return the local document data
+		 */
+		public ImDocumentData getLocalDocData() {
+			return this.localDocData;
+		}
+		
+		/**
+		 * Check whether or not this document data has virtual entries.
+		 * @return true if there are virtual entries
+		 */
+		public boolean hasVirtualEntries() {
+			return (this.virtualEntryNames.size() != 0);
+		}
+		
+		/**
+		 * Fetch a series of virtual document entries in a background thread.
+		 * @param entries the entries to fetch in background
+		 */
+		void fetchBackground(ArrayList entries) {
+			synchronized (this.backgroundFetchEntries) {
+				this.backgroundFetchEntries.addAll(entries);
+			}
+			if (this.backgroundFetchThread != null)
+				return;
+			this.backgroundFetchThread = new BackgroundFetchThread(this.docId);
+			this.backgroundFetchThread.start();
+		}
+		
+		/**
+		 * Stop any ongoing background fetching of entry data.
+		 */
+		public void stopBackgroundFetching() {
+			this.backgroundFetchThread = null;
+		}
+		
+		final void checkBackgroundFetching() throws BackgroundFetchingStoppedException {
+			Thread ct = Thread.currentThread();
+			if (this.isBackgroundFetchThread(ct) && (ct != this.backgroundFetchThread))
+				throw new BackgroundFetchingStoppedException(this.docId);
+		}
+		final boolean isBackgroundFetchThread() {
+			return this.isBackgroundFetchThread(Thread.currentThread());
+		}
+		private boolean isBackgroundFetchThread(Thread ct) {
+			return ((ct instanceof BackgroundFetchThread) && this.docId.equals(((BackgroundFetchThread) ct).docId));
+		}
+		
+		/**
+		 * Fetch all virtual document entries from backing IMS, e.g. before storing
+		 * a document to a different destination.
+		 * @param pm a progress monitor for notification in UI
+		 */
+		public void fetchVirtualEntries(ProgressMonitor pm) throws IOException {
+			this.stopBackgroundFetching(); // no need to go that way any further
+			ImDocumentEntry[] entries = this.getEntries();
+			ArrayList toFetchEntries = new ArrayList();
+			for (int e = 0; e < entries.length; e++) {
+				if (!this.localDocData.hasEntryData(entries[e]))
+					toFetchEntries.add(entries[e]);
+			}
+			if (toFetchEntries.isEmpty())
+				return;
+			if (this.imsClient == null)
+				throw new IOException("No connection to backing Image Markup Store.");
+			this.imsClient.getDocumentEntries(this.docId, toFetchEntries, this, pm);
+		}
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.util.ImDocumentData#putEntry(de.uka.ipd.idaho.im.util.ImDocumentData.ImDocumentEntry)
+		 */
+		public synchronized ImDocumentEntry putEntry(ImDocumentEntry entry) {
+			ImDocumentEntry oldEntry = super.putEntry(entry);
+			this.localDocData.putEntry(entry);
+			if (this.localDocData.hasEntryData(entry))
+				this.virtualEntryNames.remove(entry.name);
+			else this.virtualEntryNames.add(entry.name);
+			return oldEntry;
 		}
 		
 		/* (non-Javadoc)
@@ -137,13 +266,13 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 			if (this.localDocData.hasEntryData(entry))
 				return true;
 			ImDocumentEntry imsEntry = this.getEntry(entry.name);
-			return entry.getFileName().equals(imsEntry.getFileName());
+			return ((imsEntry != null) && entry.getFileName().equals(imsEntry.getFileName()));
 		}
 		
 		/* (non-Javadoc)
 		 * @see de.uka.ipd.idaho.im.util.ImDocumentData#getInputStream(java.lang.String)
 		 */
-		public InputStream getInputStream(String entryName) throws IOException {
+		public InputStream getInputStream(final String entryName) throws IOException {
 			ImDocumentEntry entry = this.getEntry(entryName);
 			
 			//	we don't know this entry at all, not even remotely
@@ -154,22 +283,55 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 			if (this.localDocData.hasEntryData(entry))
 				return this.localDocData.getInputStream(entryName);
 			
-			//	fetch entry from backing IMS
-			return this.imsClient.getDocumentEntry(this.docId, entry, this);
+			//	we're storing to backing IMS, hand out dummy (no need to fetch that data for a round trip)
+			if (this.imsStoring && this.virtualEntryNames.contains(entryName))
+				return new InputStream() {
+					{System.out.println("Using virtualized input stream for " + entryName);}
+					public int read() throws IOException {
+						return -1;
+					}
+				};
+			
+			//	fetch entry from backing IMS and recurse
+			this.imsClient.getDocumentEntry(this.docId, entry, this);
+			return this.getInputStream(entryName);
 		}
 		
 		/* (non-Javadoc)
 		 * @see de.uka.ipd.idaho.im.util.ImDocumentData#getOutputStream(java.lang.String, boolean)
 		 */
 		public OutputStream getOutputStream(final String entryName, boolean writeDirectly) throws IOException {
+			
+			//	if we're in background fetcher and entry has been fetched by other means, we don't need to write anything
+			if (isBackgroundFetchThread() && !this.virtualEntryNames.contains(entryName))
+				return new OutputStream() {
+					{System.out.println("Using virtualized output stream for " + entryName);}
+					public void write(int b) throws IOException {}
+					public void write(byte[] b) throws IOException {}
+					public void write(byte[] b, int off, int len) throws IOException {}
+				};
+			
+			//	if we're storing to backing IMS, we don't need to write a virtual entry
+			if (this.imsStoring && this.virtualEntryNames.contains(entryName))
+				return new OutputStream() {
+					{System.out.println("Using virtualized output stream for " + entryName);}
+					public void write(int b) throws IOException {}
+					public void write(byte[] b) throws IOException {}
+					public void write(byte[] b, int off, int len) throws IOException {}
+				};
+			
+			//	loop output through to local data and update own entry list afterwards
 			return new FilterOutputStream(this.localDocData.getOutputStream(entryName, writeDirectly)) {
 				public void write(int b) throws IOException {
+					checkBackgroundFetching();
 					this.out.write(b);
 				}
 				public void write(byte[] b) throws IOException {
+					checkBackgroundFetching();
 					this.out.write(b);
 				}
 				public void write(byte[] b, int off, int len) throws IOException {
+					checkBackgroundFetching();
 					this.out.write(b, off, len);
 				}
 				public void flush() throws IOException {
@@ -182,9 +344,12 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 			};
 		}
 		
-		//	TODO consider adding fetchAll() method
-		
-		//	TODO consider adding pushUpdates() method
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.util.ImDocumentData#getDocumentId()
+		 */
+		public String getDocumentId() {
+			return this.docId;
+		}
 		
 		/* (non-Javadoc)
 		 * @see de.uka.ipd.idaho.im.util.ImDocumentData#getDocumentDataId()
@@ -204,7 +369,57 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 		 * @see de.uka.ipd.idaho.im.util.ImDocumentData#canStoreDocument()
 		 */
 		public boolean canStoreDocument() {
-			return this.localDocData.canLoadDocument();
+			return this.localDocData.canStoreDocument();
+		}
+		
+		private class BackgroundFetchThread extends Thread {
+			final String docId;
+			BackgroundFetchThread(String docId) {
+				super("BackgroundFetcher" + docId);
+				this.docId = docId;
+			}
+			public void run() {
+				try {
+					if (backgroundFetchThread != this)
+						return; // we've been ordered to stop
+					if (imsClient == null)
+						return; // no connection to work with
+					
+					//	get all entries that are still virtual
+					ArrayList toFetchEntries;
+					synchronized (backgroundFetchEntries) {
+						if (backgroundFetchEntries.isEmpty())
+							return; // we're done here
+						toFetchEntries = new ArrayList();
+						for (Iterator eit = backgroundFetchEntries.iterator(); eit.hasNext();) {
+							ImDocumentEntry entry = ((ImDocumentEntry) eit.next());
+							if (virtualEntryNames.contains(entry.name))
+								toFetchEntries.add(entry);
+						}
+					}
+					
+					//	fetch entries
+					try {
+						imsClient.getDocumentEntries(docId, toFetchEntries, ImsClientDocumentData.this, ProgressMonitor.dummy);
+					}
+					catch (BackgroundFetchingStoppedException bfse) {
+						return; // told to stop in middle of reading
+					}
+					catch (IOException ioe) {
+						System.out.println("Error beckground fetching entries for " + this.docId + ": " + ioe.getMessage());
+						ioe.printStackTrace(System.out);
+					}
+				}
+				finally {
+					backgroundFetchThread = null;
+				}
+			}
+		}
+		
+		private static class BackgroundFetchingStoppedException extends IOException {
+			BackgroundFetchingStoppedException(String docId) {
+				super("Background fetching stopped for document " + docId);
+			}
 		}
 	}
 	
@@ -336,10 +551,24 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 	 * the document list returned by getDocumentList(). The document is not
 	 * locked at the backing IMS, so any attempt of an update will fail.
 	 * @param documentId the ID of the document to load
+	 * @param pm a progress monitor to observe the loading process
 	 * @return the document with the specified ID
 	 */
 	public ImDocument getDocument(String documentId, ProgressMonitor pm) throws IOException {
-		return this.getDocument(documentId, 0, pm);
+		return this.getDocument(documentId, 0, null, pm);
+	}
+	
+	/**
+	 * Obtain a document from the IMS. The valid document IDs can be read from
+	 * the document list returned by getDocumentList(). The document is not
+	 * locked at the backing IMS, so any attempt of an update will fail.
+	 * @param documentId the ID of the document to load
+	 * @param fff a filter to control deferred entry loading
+	 * @param pm a progress monitor to observe the loading process
+	 * @return the document with the specified ID
+	 */
+	public ImDocument getDocument(String documentId, FastFetchFilter fff, ProgressMonitor pm) throws IOException {
+		return this.getDocument(documentId, 0, fff, pm);
 	}
 	
 	/**
@@ -349,12 +578,28 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 	 * attempt of an update will fail.
 	 * @param documentId the ID of the document to load
 	 * @param version the number of the document version to load
+	 * @param pm a progress monitor to observe the loading process
 	 * @return the specified version of the document with the specified ID
 	 */
 	public ImDocument getDocument(String documentId, int version, ProgressMonitor pm) throws IOException {
+		return this.getDocument(documentId, version, null, pm);
+	}
+	
+	/**
+	 * Obtain a document from the IMS. The valid document IDs and respective
+	 * current version numbers can be read from the document list returned by
+	 * getDocumentList(). The document is not locked at the backing IMS, so any
+	 * attempt of an update will fail.
+	 * @param documentId the ID of the document to load
+	 * @param version the number of the document version to load
+	 * @param fff a filter to control deferred entry loading
+	 * @param pm a progress monitor to observe the loading process
+	 * @return the specified version of the document with the specified ID
+	 */
+	public ImDocument getDocument(String documentId, int version, FastFetchFilter fff, ProgressMonitor pm) throws IOException {
 		if (pm == null)
 			pm = ProgressMonitor.dummy;
-		ImDocumentData docData = this.getDocumentAsData(documentId, version, pm);
+		ImDocumentData docData = this.getDocumentAsData(documentId, version, fff, pm);
 		return ImDocumentIO.loadDocument(docData, pm);
 	}
 	
@@ -368,7 +613,21 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 	 * @return the document with the specified ID
 	 */
 	public ImDocument checkoutDocument(String documentId, ProgressMonitor pm) throws IOException {
-		return this.checkoutDocument(documentId, 0, pm);
+		return this.checkoutDocument(documentId, 0, null, pm);
+	}
+	
+	/**
+	 * Check out a document from the backing IMS. The valid document IDs can be
+	 * read from the document list returned by getDocumentList(). The document
+	 * will be marked as checked out and will not be able to be worked on until
+	 * released by the user checking it out, or an administrator.
+	 * @param documentId the ID of the document to load
+	 * @param fff a filter to control deferred entry loading
+	 * @param pm a progress monitor to observe the checkout process
+	 * @return the document with the specified ID
+	 */
+	public ImDocument checkoutDocument(String documentId, FastFetchFilter fff, ProgressMonitor pm) throws IOException {
+		return this.checkoutDocument(documentId, 0, fff, pm);
 	}
 	
 	/**
@@ -386,9 +645,28 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 	 * @return the specified version of the document with the specified ID
 	 */
 	public ImDocument checkoutDocument(String documentId, int version, ProgressMonitor pm) throws IOException {
+		return this.checkoutDocument(documentId, version, null, pm);
+	}
+	
+	/**
+	 * Check out a document from the backing IMS. The valid document IDs and
+	 * respective current version numbers can be read from the document list
+	 * returned by getDocumentList(). The document will be marked as checked out
+	 * and will not be able to be worked on until released by the user checking
+	 * it out, or an administrator.
+	 * @param documentId the ID of the document to load
+	 * @param version the number of the document version to load (version number
+	 *            0 always marks the most recent version, positive integers
+	 *            indicate absolute versions numbers, while negative integers
+	 *            indicate a version number backward from the most recent one)
+	 * @param fff a filter to control deferred entry loading
+	 * @param pm a progress monitor to observe the checkout process
+	 * @return the specified version of the document with the specified ID
+	 */
+	public ImDocument checkoutDocument(String documentId, int version, FastFetchFilter fff, ProgressMonitor pm) throws IOException {
 		if (pm == null)
 			pm = ProgressMonitor.dummy;
-		ImDocumentData docData = this.checkoutDocumentAsData(documentId, version, pm);
+		ImDocumentData docData = this.checkoutDocumentAsData(documentId, version, fff, pm);
 		return ImDocumentIO.loadDocument(docData, pm);
 	}
 	
@@ -397,10 +675,24 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 	 * the document list returned by getDocumentList(). The document is not
 	 * locked at the backing IMS, so any attempt of an update will fail.
 	 * @param documentId the ID of the document to load
+	 * @param pm a progress monitor to observe the loading process
 	 * @return the document with the specified ID
 	 */
-	public ImDocumentData getDocumentAsData(String documentId, ProgressMonitor pm) throws IOException {
-		return this.getDocumentAsData(documentId, 0, pm);
+	public ImsClientDocumentData getDocumentAsData(String documentId, ProgressMonitor pm) throws IOException {
+		return this.getDocumentAsData(documentId, 0, null, pm);
+	}
+	
+	/**
+	 * Obtain a document from the IMS. The valid document IDs can be read from
+	 * the document list returned by getDocumentList(). The document is not
+	 * locked at the backing IMS, so any attempt of an update will fail.
+	 * @param documentId the ID of the document to load
+	 * @param fff a filter to control deferred entry loading
+	 * @param pm a progress monitor to observe the loading process
+	 * @return the document with the specified ID
+	 */
+	public ImsClientDocumentData getDocumentAsData(String documentId, FastFetchFilter fff, ProgressMonitor pm) throws IOException {
+		return this.getDocumentAsData(documentId, 0, fff, pm);
 	}
 	
 	/**
@@ -410,10 +702,26 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 	 * attempt of an update will fail.
 	 * @param documentId the ID of the document to load
 	 * @param version the number of the document version to load
+	 * @param pm a progress monitor to observe the loading process
 	 * @return the specified version of the document with the specified ID
 	 */
-	public ImDocumentData getDocumentAsData(String documentId, int version, ProgressMonitor pm) throws IOException {
-		return this.fetchDocumentData(GET_DOCUMENT, documentId, version, ((pm == null) ? ProgressMonitor.dummy : pm));
+	public ImsClientDocumentData getDocumentAsData(String documentId, int version, ProgressMonitor pm) throws IOException {
+		return this.getDocumentAsData(documentId, version, null, pm);
+	}
+	
+	/**
+	 * Obtain a document from the IMS. The valid document IDs and respective
+	 * current version numbers can be read from the document list returned by
+	 * getDocumentList(). The document is not locked at the backing IMS, so any
+	 * attempt of an update will fail.
+	 * @param documentId the ID of the document to load
+	 * @param version the number of the document version to load
+	 * @param fff a filter to control deferred entry loading
+	 * @param pm a progress monitor to observe the loading process
+	 * @return the specified version of the document with the specified ID
+	 */
+	public ImsClientDocumentData getDocumentAsData(String documentId, int version, FastFetchFilter fff, ProgressMonitor pm) throws IOException {
+		return this.fetchDocumentData(GET_DOCUMENT, documentId, version, fff, ((pm == null) ? ProgressMonitor.dummy : pm));
 	}
 	
 	/**
@@ -425,8 +733,22 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 	 * @param pm a progress monitor to observe the checkout process
 	 * @return the document with the specified ID
 	 */
-	public ImDocumentData checkoutDocumentAsData(String documentId, ProgressMonitor pm) throws IOException {
-		return this.checkoutDocumentAsData(documentId, 0, pm);
+	public ImsClientDocumentData checkoutDocumentAsData(String documentId, ProgressMonitor pm) throws IOException {
+		return this.checkoutDocumentAsData(documentId, 0, null, pm);
+	}
+	
+	/**
+	 * Check out a document from the backing IMS. The valid document IDs can be
+	 * read from the document list returned by getDocumentList(). The document
+	 * will be marked as checked out and will not be able to be worked on until
+	 * released by the user checking it out, or an administrator.
+	 * @param documentId the ID of the document to load
+	 * @param fff a filter to control deferred entry loading
+	 * @param pm a progress monitor to observe the checkout process
+	 * @return the document with the specified ID
+	 */
+	public ImsClientDocumentData checkoutDocumentAsData(String documentId, FastFetchFilter fff, ProgressMonitor pm) throws IOException {
+		return this.checkoutDocumentAsData(documentId, 0, fff, pm);
 	}
 	
 	/**
@@ -443,17 +765,30 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 	 * @param pm a progress monitor to observe the checkout process
 	 * @return the specified version of the document with the specified ID
 	 */
-	public ImDocumentData checkoutDocumentAsData(String documentId, int version, ProgressMonitor pm) throws IOException {
-		return this.fetchDocumentData(CHECKOUT_DOCUMENT, documentId, version, ((pm == null) ? ProgressMonitor.dummy : pm));
+	public ImsClientDocumentData checkoutDocumentAsData(String documentId, int version, ProgressMonitor pm) throws IOException {
+		return this.checkoutDocumentAsData(documentId, version, null, pm);
 	}
 	
-	private ImDocumentData fetchDocumentData(String command, String docId, int version, ProgressMonitor pm) throws IOException {
-		
-		//	TODO add fetchFast flag to indicate fetching entries only on demand (supplements !!!)
-		
-		//	TODO also facilitate specifying range of pages to load images for (opening two pages out of 150 !!!)
-		
-		//	TODO use ImsClientDocumentData wrapper for that
+	/**
+	 * Check out a document from the backing IMS. The valid document IDs and
+	 * respective current version numbers can be read from the document list
+	 * returned by getDocumentList(). The document will be marked as checked out
+	 * and will not be able to be worked on until released by the user checking
+	 * it out, or an administrator.
+	 * @param documentId the ID of the document to load
+	 * @param version the number of the document version to load (version number
+	 *            0 always marks the most recent version, positive integers
+	 *            indicate absolute versions numbers, while negative integers
+	 *            indicate a version number backward from the most recent one)
+	 * @param fff a filter to control deferred entry loading
+	 * @param pm a progress monitor to observe the checkout process
+	 * @return the specified version of the document with the specified ID
+	 */
+	public ImsClientDocumentData checkoutDocumentAsData(String documentId, int version, FastFetchFilter fff, ProgressMonitor pm) throws IOException {
+		return this.fetchDocumentData(CHECKOUT_DOCUMENT, documentId, version, fff, ((pm == null) ? ProgressMonitor.dummy : pm));
+	}
+	
+	private ImsClientDocumentData fetchDocumentData(String command, String docId, int version, FastFetchFilter fff, ProgressMonitor pm) throws IOException {
 		
 		//	make sure we're logged in
 		if (!this.authClient.isLoggedIn()) throw new IOException("Not logged in.");
@@ -503,30 +838,46 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 		}
 		
 		//	get local document data
-		ImDocumentData docData = this.dataCache.getDocumentData(docId);
+		ImsClientDocumentData docData = this.dataCache.getDocumentData(docId);
 		
 		//	create mapping from logical entry names to (hash-extended) cache file names, and collect to-fetch entries
 		ArrayList toFetchDocEntries = new ArrayList();
+		ArrayList backgroundFetchDocEntries = new ArrayList();
 		for (int e = 0; e < docEntries.size(); e++) {
 			ImDocumentEntry docEntry = ((ImDocumentEntry) docEntries.get(e));
 			if (docData.hasEntryData(docEntry))
 				docData.putEntry(docEntry);
-			else toFetchDocEntries.add(docEntry);
+			else if (fff == null)
+				toFetchDocEntries.add(docEntry);
+			else {
+				int fm = fff.getFetchMode(docEntry);
+				if (fm == FastFetchFilter.FETCH_ON_DEMAND)
+					docData.putEntry(docEntry); // add virtual entry
+				else if (fm == FastFetchFilter.FETCH_DEFERRED) {
+					docData.putEntry(docEntry); // add virtual entry
+					backgroundFetchDocEntries.add(docEntry); // enqueue for deferred fetching
+				}
+				else toFetchDocEntries.add(docEntry);
+			}
 		}
 		
-		//	TODO if in fastFetch mode, only get entries required for instantiating document (everything but supplements, basically)
-		
-		//	fetch missing local entries (if any)
+		//	fetch missing (non-virtual) local entries (if any)
 		pm.setBaseProgress(10);
 		pm.setMaxProgress(50);
 		if (toFetchDocEntries.isEmpty())
 			pm.setProgress(100);
-		else this.getDocumentEntries(docId, ((ImDocumentEntry[]) toFetchDocEntries.toArray(new ImDocumentEntry[toFetchDocEntries.size()])), docData, pm);
-		
-		//	TODO in fastFetch mode, let's specify ourselves as the data provider to below method
+		else this.getDocumentEntries(docId, toFetchDocEntries, docData, pm);
 		
 		//	store updated entry list
 		this.dataCache.storeEntryList(docData);
+		
+		//	add IMS connection if there are virtual entries
+		if (docData.hasVirtualEntries())
+			docData.setImsClient(this);
+		
+		//	start background fetch thread
+		if (backgroundFetchDocEntries.size() != 0)
+			docData.fetchBackground(backgroundFetchDocEntries);
 		
 		//	finally
 		return docData;
@@ -555,58 +906,170 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 //	 * @return an input stream to read the entry data from
 //	 * @throws IOException
 //	 */
-	private InputStream getDocumentEntry(String docId, ImDocumentEntry entry, ImDocumentData docData) throws IOException {
-		ImDocumentEntry[] entries = {entry};
-		this.getDocumentEntries(docId, entries, docData, null);
-		return docData.getInputStream(entry);
+	void getDocumentEntry(String docId, ImDocumentEntry entry, ImDocumentData docData) throws IOException {
+		this.getDocumentEntries(docId, Collections.singletonList(entry), docData, null);
 	}
-	private void getDocumentEntries(String docId, ImDocumentEntry[] entries, ImDocumentData docData, ProgressMonitor pm) throws IOException {
+	void getDocumentEntries(String docId, List entries, ImDocumentData docData, ProgressMonitor pm) throws IOException {
 		Connection con = null;
-		try {
-			con = this.authClient.getConnection();
-			BufferedWriter bw = con.getWriter();
-			bw.write(GET_DOCUMENT_ENTRIES);
-			bw.newLine();
-			bw.write(this.authClient.getSessionID());
-			bw.newLine();
-			bw.write(docId);
-			bw.newLine();
-			for (int e = 0; e < entries.length; e++) {
-				bw.write(entries[e].toTabString());
-				bw.newLine();
-			}
-			bw.newLine();
-			bw.flush();
-			
-			BufferedLineInputStream blis = con.getInputStream();
-			String error = blis.readLine();
-			if (!GET_DOCUMENT_ENTRIES.equals(error))
-				throw new IOException(error);
-			
-			ZipInputStream zin = new ZipInputStream(blis);
-			int zeCount = 0;
-			byte[] buffer = new byte[1024];
-			for (ZipEntry ze; (ze = zin.getNextEntry()) != null;) {
-				zeCount++;
-				ImDocumentEntry docEntry = new ImDocumentEntry(ze);
-				if (pm != null) {
-					pm.setInfo(" - " + docEntry.name);
-					pm.setProgress((zeCount * 100) / entries.length);
-				}
-				OutputStream cacheOut = docData.getOutputStream(docEntry, true);
-				for (int r; (r = zin.read(buffer, 0, buffer.length)) != -1;)
-					cacheOut.write(buffer, 0, r);
-				cacheOut.flush();
-				cacheOut.close();
-			}
+		
+		//	fetch any missing entries
+		ArrayList docEntries = new ArrayList(entries);
+		int fetchedDocEntryCount = 0;
+		HashSet fetchedDocEntryNames = new HashSet();
+		int fetchedNoDocEntriesErrorCount = 0;
+		boolean isPreDocEntryError = true;
+		while (docEntries.size() != 0) {
 			if (pm != null)
-				pm.setProgress(100);
+				pm.setInfo(" - getting " + docEntries.size() + " entries");
+			
+			//	try and get missing document entries
+			try {
+				con = this.authClient.getConnection();
+				BufferedWriter bw = con.getWriter();
+				
+				bw.write(GET_DOCUMENT_ENTRIES);
+				bw.newLine();
+				bw.write(this.authClient.getSessionID());
+				bw.newLine();
+				bw.write(docId);
+				bw.newLine();
+				for (int e = 0; e < docEntries.size(); e++) {
+					bw.write(((ImDocumentEntry) docEntries.get(e)).toTabString());
+					bw.newLine();
+				}
+				bw.newLine();
+				bw.flush();
+				
+				BufferedLineInputStream blis = con.getInputStream();
+				String error = blis.readLine();
+				if (!GET_DOCUMENT_ENTRIES.equals(error))
+					throw new IOException(error);
+				
+				isPreDocEntryError = false;
+				ZipInputStream zin = new ZipInputStream(blis);
+				byte[] buffer = new byte[1024];
+				for (ZipEntry ze; (ze = zin.getNextEntry()) != null;) {
+					ImDocumentEntry docEntry = new ImDocumentEntry(ze);
+					if (pm != null)
+						pm.setInfo(" - " + docEntry.name);
+					OutputStream cacheOut = docData.getOutputStream(docEntry, true);
+					for (int r; (r = zin.read(buffer, 0, buffer.length)) != -1;)
+						cacheOut.write(buffer, 0, r);
+					cacheOut.flush();
+					cacheOut.close();
+					fetchedDocEntryCount++;
+					if (pm != null)
+						pm.setProgress((fetchedDocEntryCount * 100) / entries.size());
+					fetchedDocEntryNames.add(docEntry.getFileName());
+					fetchedNoDocEntriesErrorCount = 0;
+				}
+				if (pm != null)
+					pm.setProgress(100);
+			}
+			
+			//	throw exception to fail if we didn't get any new entries for a few rounds
+			catch (IOException ioe) {
+				
+				//	fail right away if we haven't even started receiving entries
+				if (isPreDocEntryError)
+					throw ioe;
+				
+				//	fail right away if we have an interrupted background fetch (retrying would be the opposite of the desired effect)
+				if (ioe instanceof ImsClientDocumentData.BackgroundFetchingStoppedException)
+					throw ioe;
+				
+				//	did we get any new entries in this round?
+				if (fetchedDocEntryNames.size() != 0) {
+					if (pm != null)
+						pm.setInfo(" - caught " + ioe.getMessage() + ", trying again");
+				}
+				
+				//	did we at least get any new entries in one of the last couple of rounds?
+				else if (fetchedNoDocEntriesErrorCount < 10) {
+					fetchedNoDocEntriesErrorCount++;
+					if (pm != null)
+						pm.setInfo(" - failed to get any entries, re-trying after " + fetchedNoDocEntriesErrorCount + " seconds");
+					try {
+						Thread.sleep(fetchedNoDocEntriesErrorCount * 1000);
+					} catch (InterruptedException ie) {}
+				}
+				
+				//	looks like a hopeless effort right now ...
+				else {
+					if (pm != null)
+						pm.setInfo(" ==> failed to get any entries on 10 attempts, giving up");
+					throw ioe;
+				}
+			}
+			
+			//	close connection no matter what
+			finally {
+				if (con != null)
+					con.close();
+				con = null;
+			}
+			
+			//	remove entries we got this round
+			for (int e = 0; e < docEntries.size(); e++) {
+				ImDocumentEntry entry = ((ImDocumentEntry) docEntries.get(e));
+				if (fetchedDocEntryNames.contains(entry.getFileName()))
+					docEntries.remove(e--);
+			}
+			
+			//	prepare for next round
+			fetchedDocEntryNames.clear();
+			isPreDocEntryError = true;
+			
+			//	wait a little so we don't incur the same error again right away
+			if (docEntries.size() != 0) try {
+				Thread.sleep(1000);
+			} catch (InterruptedException ie) {}
 		}
-		finally {
-			if (con != null)
-				con.close();
-			con = null;
-		}
+//		try {
+//			con = this.authClient.getConnection();
+//			BufferedWriter bw = con.getWriter();
+//			bw.write(GET_DOCUMENT_ENTRIES);
+//			bw.newLine();
+//			bw.write(this.authClient.getSessionID());
+//			bw.newLine();
+//			bw.write(docId);
+//			bw.newLine();
+//			for (int e = 0; e < entries.length; e++) {
+//				bw.write(entries[e].toTabString());
+//				bw.newLine();
+//			}
+//			bw.newLine();
+//			bw.flush();
+//			
+//			BufferedLineInputStream blis = con.getInputStream();
+//			String error = blis.readLine();
+//			if (!GET_DOCUMENT_ENTRIES.equals(error))
+//				throw new IOException(error);
+//			
+//			ZipInputStream zin = new ZipInputStream(blis);
+//			int zeCount = 0;
+//			byte[] buffer = new byte[1024];
+//			for (ZipEntry ze; (ze = zin.getNextEntry()) != null;) {
+//				zeCount++;
+//				ImDocumentEntry docEntry = new ImDocumentEntry(ze);
+//				if (pm != null) {
+//					pm.setInfo(" - " + docEntry.name);
+//					pm.setProgress((zeCount * 100) / entries.length);
+//				}
+//				OutputStream cacheOut = docData.getOutputStream(docEntry, true);
+//				for (int r; (r = zin.read(buffer, 0, buffer.length)) != -1;)
+//					cacheOut.write(buffer, 0, r);
+//				cacheOut.flush();
+//				cacheOut.close();
+//			}
+//			if (pm != null)
+//				pm.setProgress(100);
+//		}
+//		finally {
+//			if (con != null)
+//				con.close();
+//			con = null;
+//		}
 	}
 	
 	/**
@@ -708,14 +1171,40 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 		//	make sure we're logged in
 		if (!this.authClient.isLoggedIn()) throw new IOException("Not logged in.");
 		
-		//	TODO adjust progress indication to leave space for server interaction
+		//	get document data object to write to
+		ImsClientDocumentData docData = null;
+		if (doc instanceof DataBackedImDocument) {
+			ImDocumentData exDocData = ((DataBackedImDocument) doc).getDocumentData();
+			if (exDocData instanceof ImsClientDocumentData)
+				docData = ((ImsClientDocumentData) exDocData);
+			else docData = this.dataCache.getDocumentData(doc.docId);
+		}
+		else docData = this.dataCache.getDocumentData(doc.docId);
+		pm.setInfo(" - got document data cache");
 		
 		//	generate and cache local entries (we still have to send them all to the server so it has a complete list)
-		ImDocumentData docData = this.dataCache.getDocumentData(doc.docId);
-		ImDocumentIO.storeDocument(doc, docData, pm);
+		pm.setStep("Updating local cache");
+		pm.setBaseProgress(0);
+		pm.setProgress(0);
+		pm.setMaxProgress(50);
+		try {
+			docData.setImsStoring(true);
+			pm.setInfo(" - storage mode activated");
+			ImDocumentIO.storeDocument(doc, docData, new CascadingProgressMonitor(pm));
+			pm.setInfo(" - data stored");
+		}
+		finally {
+			docData.setImsStoring(false);
+			pm.setInfo(" - storage mode deactivated");
+		}
 		this.dataCache.storeEntryList(docData);
+		pm.setInfo(" - cache entry list stored");
 		
 		//	send update
+		pm.setStep("Sending data to server");
+		pm.setBaseProgress(50);
+		pm.setProgress(0);
+		pm.setMaxProgress(100);
 		return this.sendDocumentData(command, doc.docId, docData, userName, pm);
 	}
 	
@@ -821,20 +1310,15 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 		 * - ... OR directly hand it the storage folder to write to the final destination (breach of encapsulation, but saves tons of copying effort)
 		 *  */
 		
-		// 	TODO if we have an on-demand fetching document data object, upload only entries whose data is available
-		//	TODO and then, the rest will be unmodified, so server won't ever ask for entries that were never fetched
-		
 		//	make sure we're logged in
 		if (!this.authClient.isLoggedIn()) throw new IOException("Not logged in.");
-		
-		//	TODO adjust progress indication to leave space for server interaction
 		
 		//	generate and cache local entries (we still have to send them all to the server so it has a complete list)
 		ImDocumentEntry[] docEntries = docData.getEntries();
 		
 		//	obtain list of to-update entries
 		Connection con = null;
-		ArrayList toUpdateDocEntries = null;
+		LinkedList toUpdateDocEntries = null;
 		String updateKey = null;
 		try {
 			pm.setInfo("Connecting to server ...");
@@ -879,13 +1363,13 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 				
 				//	receive list of to-update entries
 				else {
-					toUpdateDocEntries = new ArrayList();
+					toUpdateDocEntries = new LinkedList();
 					for (String entryString; (entryString = br.readLine()) != null;) {
 						if (entryString.length() == 0)
 							break;
 						ImDocumentEntry entry = ImDocumentEntry.fromTabString(entryString);
 						if (entry != null)
-							toUpdateDocEntries.add(entry);
+							toUpdateDocEntries.addLast(entry);
 					}
 					pm.setInfo("Received list of " + toUpdateDocEntries.size() + " to-update entries");
 				}
@@ -898,25 +1382,27 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 		}
 		
 		//	nothing changed at all, we're done
-		if (toUpdateDocEntries.size() == 0) {
+		if (toUpdateDocEntries.isEmpty()) {
 			String[] log = {"Document up to date on server"};
 			return log;
 		}
 		
 		//	send to-update entries (make sure to include name and timestamp)
-		try {
-			pm.setInfo("Sending " + toUpdateDocEntries.size() + " entries to server ...");
+		int toUpdateDocEntryCount = toUpdateDocEntries.size();
+		while (toUpdateDocEntries.size() != 0) try {
+			pm.setInfo("Sending " + toUpdateDocEntries.size() + ((toUpdateDocEntries.size() < toUpdateDocEntryCount) ? " remaning" : "") + " entries to server ...");
 			con = this.authClient.getConnection();
 			BufferedLineOutputStream out = con.getOutputStream();
 			out.writeLine(UPDATE_DOCUMENT_ENTRIES);
 			out.writeLine(this.authClient.getSessionID());
 			out.writeLine(updateKey);
-			ZipOutputStream zout = new ZipOutputStream(out);
+			ByteCountingOutputStream bcout = new ByteCountingOutputStream(out);
+			ZipOutputStream zout = new ZipOutputStream(bcout);
 			byte[] buffer = new byte[1024];
-			for (int e = 0; e < toUpdateDocEntries.size(); e++) {
-				ImDocumentEntry docEntry = ((ImDocumentEntry) toUpdateDocEntries.get(e));
+			while (toUpdateDocEntries.size() != 0) {
+				ImDocumentEntry docEntry = ((ImDocumentEntry) toUpdateDocEntries.removeFirst());
 				pm.setInfo(" - " + docEntry.name);
-				pm.setProgress((0 * 100) / toUpdateDocEntries.size());
+				pm.setProgress(((toUpdateDocEntryCount - toUpdateDocEntries.size()) * 100) / toUpdateDocEntryCount);
 				ZipEntry ze = new ZipEntry(docEntry.getFileName());
 				ze.setTime(docEntry.updateTime);
 				zout.putNextEntry(ze);
@@ -925,34 +1411,83 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 					zout.write(buffer, 0, r);
 				cacheIn.close();
 				zout.closeEntry();
+				if (bcout.bytesWritten > (1024 * 1024 * 128))
+					break; // stop (partial) upload after 128MB to ease memory consumption due to HTTP request data buffering
 			}
 			
-			ZipEntry ze = new ZipEntry(updateKey);
-			zout.putNextEntry(ze);
-			zout.closeEntry();
-			zout.flush();
+			//	we've sent everything, indicate so and expect update result
+			if (toUpdateDocEntries.isEmpty()) {
+				ZipEntry ze = new ZipEntry(updateKey);
+				zout.putNextEntry(ze);
+				zout.closeEntry();
+				zout.flush();
+				
+				pm.setInfo("Receiving update result ...");
+				if (pm instanceof ControllingProgressMonitor) {
+					((ControllingProgressMonitor) pm).setPauseResumeEnabled(false);
+					((ControllingProgressMonitor) pm).setAbortEnabled(false);
+				}
+				BufferedReader br = con.getReader();
+				String error = br.readLine();
+				if (UPDATE_DOCUMENT_ENTRIES.equals(error)) {
+					StringVector log = new StringVector();
+					for (String logEntry; (logEntry = br.readLine()) != null;)
+						log.addElement(logEntry);
+					pm.setInfo("Update complete.");
+					pm.setProgress(100);
+					return log.toStringArray();
+				}
+				else throw new IOException(error);
+			}
 			
-			pm.setInfo("Receiving update result ...");
-			if (pm instanceof ControllingProgressMonitor) {
-				((ControllingProgressMonitor) pm).setPauseResumeEnabled(false);
-				((ControllingProgressMonitor) pm).setAbortEnabled(false);
+			//	more to send, indicate so and expect acknowledgment for last part
+			else {
+				ZipEntry ze = new ZipEntry(MORE_DOCUMENT_ENTRIES);
+				zout.putNextEntry(ze);
+				zout.closeEntry();
+				zout.flush();
+				
+				BufferedReader br = con.getReader();
+				String error = br.readLine();
+				if (!MORE_DOCUMENT_ENTRIES.equals(error))
+					throw new IOException(error);
 			}
-			BufferedReader br = con.getReader();
-			String error = br.readLine();
-			if (UPDATE_DOCUMENT_ENTRIES.equals(error)) {
-				StringVector log = new StringVector();
-				for (String logEntry; (logEntry = br.readLine()) != null;)
-					log.addElement(logEntry);
-				pm.setInfo("Update complete.");
-				pm.setProgress(100);
-				return log.toStringArray();
-			}
-			else throw new IOException(error);
 		}
 		finally {
 			if (con != null)
 				con.close();
 			con = null;
+		}
+		
+		//	never gonna happen, but Java don't know
+		String[] log = {"Strange outcome of upload to server ..."};
+		return log;
+	}
+	
+	private static class ByteCountingOutputStream extends OutputStream {
+		private OutputStream out;
+		int bytesWritten = 0;
+		ByteCountingOutputStream(OutputStream out) {
+			this.out = out;
+		}
+		public void write(int b) throws IOException {
+			this.out.write(b);
+			this.bytesWritten++;
+		}
+		public void write(byte[] b) throws IOException {
+			this.out.write(b);
+			this.bytesWritten += b.length;
+		}
+
+		public void write(byte[] b, int off, int len) throws IOException {
+			this.out.write(b, off, len);
+			this.bytesWritten += len;
+		}
+		public void flush() throws IOException {
+			this.out.flush();
+		}
+		public void close() throws IOException {
+			this.out.close();
 		}
 	}
 	
@@ -1074,6 +1609,7 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 	}
 	
 	/**
+	 * fast-fetch test
 	 * @param args 
 	 */
 	public static void main(String[] args) throws Exception {
@@ -1082,28 +1618,71 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 		ac.login("Admin", "GG");
 		GoldenGateImsClient ggic = new GoldenGateImsClient(ac, new DocumentDataCache() {
 			private File cacheRootFolder = new File("E:/Testdaten/ImsTest");
-			public ImDocumentData getDocumentData(String docId) throws IOException {
+			public ImsClientDocumentData getDocumentData(String docId) throws IOException {
 				File docCacheFolder = new File(this.cacheRootFolder, docId);
 				docCacheFolder.mkdirs();
+				ImDocumentData localDocData;
 				if ((new File(docCacheFolder, "entries.txt")).exists())
-					return new FolderImDocumentData(docCacheFolder, null);
-				else return new FolderImDocumentData(docCacheFolder);
+					localDocData = new FolderImDocumentData(docCacheFolder, null);
+				else localDocData = new FolderImDocumentData(docCacheFolder);
+				return new ImsClientDocumentData(docId, localDocData);
 			}
-			public void storeEntryList(ImDocumentData docData) throws IOException {
-				((FolderImDocumentData) docData).storeEntryList();
+			public void storeEntryList(ImsClientDocumentData docData) throws IOException {
+				((FolderImDocumentData) docData.getLocalDocData()).storeEntryList();
 			}
 		});
 		
-		InputStream docIn = new BufferedInputStream(new FileInputStream(new File("E:/Testdaten/PdfExtract/zt00872.pdf.imf")));
-		ImDocument doc = ImDocumentIO.loadDocument(docIn);
-		docIn.close();
-//		ImDocument doc = ggic.checkoutDocument("FFF1CA60FFCDF655E279E450FFFD2C09", null);
-//		doc.setAttribute("test", ("test at " + System.currentTimeMillis()));
-		doc.setAttribute("test", ("" + System.currentTimeMillis()));
+//		ImDocument doc = ImDocumentIO.loadDocument(new File("E:/Testdaten/PdfExtract/EJT/ejt-502_trietsch_miko_deans.pdf.imdir"));
+//		String[] up = ggic.updateDocument(doc, "TEST", null);
+//		for (int e = 0; e < up.length; e++)
+//			System.out.println(up[e]);
+//		
+		ImDocument doc = ggic.getDocument("3F5A2711FFCC9800FFB2FFF8FFA6FFCD", new FastFetchFilter() {
+			public int getFetchMode(ImDocumentEntry entry) {
+				if (entry.name.startsWith(ImSupplement.SOURCE_TYPE + "."))
+					return FETCH_ON_DEMAND;
+				else if (entry.name.startsWith(ImSupplement.FIGURE_TYPE + "@"))
+					return FETCH_ON_DEMAND;
+				else if (entry.name.startsWith(ImSupplement.SCAN_TYPE + "@"))
+					return FETCH_ON_DEMAND;
+				else if (entry.name.startsWith("page") && entry.name.endsWith(".png")) {
+					String pidStr = entry.name;
+					pidStr = pidStr.substring("page".length());
+					pidStr = pidStr.substring(0, (pidStr.length() - ".png".length()));
+					while (pidStr.startsWith("0"))
+						pidStr = pidStr.substring("0".length());
+					try {
+						int pid = Integer.parseInt(pidStr);
+						return ((pid < 5) ? FETCH_IMMEDIATELY : FETCH_DEFERRED);
+					}
+					catch (NumberFormatException nfe) {
+						return FETCH_IMMEDIATELY;
+					}
+					
+				}
+				else return FETCH_IMMEDIATELY;
+			}
+		}, null);
 		
-		String[] up = ggic.updateDocument(doc, "TEST", null);
-		for (int e = 0; e < up.length; e++)
-			System.out.println(up[e]);
+		InputStream is = doc.getSupplement(ImSupplement.SOURCE_TYPE).getInputStream();
+		int sourceBytes = 0;
+		for (int r; (r = is.read()) != -1;)
+			sourceBytes++;
+		is.close();
+		System.out.println("Got " + sourceBytes + " source bytes");
+		
+		doc.addSupplement(new ImSupplement(doc, "test", "text/plain") {
+			public String getId() {
+				return this.getType();
+			}
+			public InputStream getInputStream() throws IOException {
+				return new ByteArrayInputStream("TEST".getBytes());
+			}
+		});
+		ggic.updateDocument(doc, null);
+		
+//		doc.setAttribute("test", ("test at " + System.currentTimeMillis()));
+//		doc.setAttribute("test", ("" + System.currentTimeMillis()));
 //		
 //		ggic.releaseDocument("FFF1CA60FFCDF655E279E450FFFD2C09");
 //		
@@ -1116,4 +1695,49 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 //		doc.getPage(0).setAttribute("test2");
 //		ggic.uploadDocument(doc, "TEST", null);
 	}
+//	
+//	/**
+//	 * general test
+//	 * @param args 
+//	 */
+//	public static void main(String[] args) throws Exception {
+//		ServerConnection sc = ServerConnection.getServerConnection("localhost", 8015);
+//		AuthenticatedClient ac = AuthenticatedClient.getAuthenticatedClient(sc);
+//		ac.login("Admin", "GG");
+//		GoldenGateImsClient ggic = new GoldenGateImsClient(ac, new DocumentDataCache() {
+//			private File cacheRootFolder = new File("E:/Testdaten/ImsTest");
+//			public ImDocumentData getDocumentData(String docId) throws IOException {
+//				File docCacheFolder = new File(this.cacheRootFolder, docId);
+//				docCacheFolder.mkdirs();
+//				if ((new File(docCacheFolder, "entries.txt")).exists())
+//					return new FolderImDocumentData(docCacheFolder, null);
+//				else return new FolderImDocumentData(docCacheFolder);
+//			}
+//			public void storeEntryList(ImDocumentData docData) throws IOException {
+//				((FolderImDocumentData) docData).storeEntryList();
+//			}
+//		});
+//		
+//		InputStream docIn = new BufferedInputStream(new FileInputStream(new File("E:/Testdaten/PdfExtract/zt00872.pdf.imf")));
+//		ImDocument doc = ImDocumentIO.loadDocument(docIn);
+//		docIn.close();
+////		ImDocument doc = ggic.checkoutDocument("FFF1CA60FFCDF655E279E450FFFD2C09", null);
+////		doc.setAttribute("test", ("test at " + System.currentTimeMillis()));
+//		doc.setAttribute("test", ("" + System.currentTimeMillis()));
+//		
+//		String[] up = ggic.updateDocument(doc, "TEST", null);
+//		for (int e = 0; e < up.length; e++)
+//			System.out.println(up[e]);
+////		
+////		ggic.releaseDocument("FFF1CA60FFCDF655E279E450FFFD2C09");
+////		
+////		ImDocument doc = ggic.getDocument("FFF1CA60FFCDF655E279E450FFFD2C09", null);
+//////		OutputStream docOut = new BufferedOutputStream(new FileOutputStream(new File("E:/Testdaten/PdfExtract/zt00872.pdf.resaved.imf")));
+//////		ImfIO.storeDocument(doc, docOut);
+//////		docOut.flush();
+//////		docOut.close();
+////		doc.getPage(0).removeAttribute("test");
+////		doc.getPage(0).setAttribute("test2");
+////		ggic.uploadDocument(doc, "TEST", null);
+//	}
 }

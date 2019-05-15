@@ -33,6 +33,9 @@
 	<property name="jar.imr" value="${dist.home}/Components/GgServerIMR.jar" />
 	
 	<!-- path to the .jar file that shall be created -->
+	<property name="jar.ime" value="${dist.home}/Components/GgServerIME.jar" />
+	
+	<!-- path to the .jar file that shall be created -->
 	<property name="jar.imi" value="${dist.home}/Components/GgServerIMI.jar" />
 	<property name="jar.imipdf" value="${dist.home}/Components/GgServerIMIData/PdfImporter.jar" />
 	<property name="jar.imipdfslave" value="${dist.home}/Components/GgServerIMIData/PdfImporterData/PdfImporterSlave.jar" />
@@ -47,6 +50,9 @@
 	
 	<!-- path to the .jar file that shall be created -->
 	<property name="jar.imsdocio" value="${dist.home}/Plugins/ImsDocumentIO.jar" />
+	
+	<!-- path to the .jar file that shall be created -->
+	<property name="jar.imeclt" value="${dist.home}/Plugins/ImeClient.jar" />
 	
 	
 	<!-- path to the application .zip file that shall be created -->

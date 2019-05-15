@@ -81,6 +81,7 @@ public class PdfImporter extends ImiDocumentImporter {
 		Settings config = Settings.loadSettings(new File(this.dataPath, "config.cnfg"));
 		
 		//	make document style templates available (we can do without, however)
+		//	TODO load this on first use (won't work before ECS is up and available)
 		this.docStyleListUrl = config.getSetting("docStyleListUrl");
 		if (this.docStyleListUrl != null) try {
 			this.docStyleNamePattern = config.getSetting("docStyleNamePattern");
@@ -95,7 +96,7 @@ public class PdfImporter extends ImiDocumentImporter {
 		//	get font decoding charset path (file or URL)
 		this.fontCharsetPath = config.getSetting("fontCharsetPath", "fontDecoderCharset.cnfg");
 		if (this.fontCharsetPath.length() > 1) {
-			if (this.fontCharsetPath.startsWith("http://")) {}
+			if (this.fontCharsetPath.startsWith("http://") || this.fontCharsetPath.startsWith("https://")) {}
 			else if (this.fontCharsetPath.startsWith("/")) {
 				File fontCharsetFile = new File(this.fontCharsetPath);
 				if (fontCharsetFile.exists())

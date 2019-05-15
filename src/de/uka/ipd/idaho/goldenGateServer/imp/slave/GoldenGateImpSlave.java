@@ -45,6 +45,7 @@ import de.uka.ipd.idaho.goldenGate.configuration.UrlConfiguration;
 import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.imagine.GoldenGateImagine;
 import de.uka.ipd.idaho.im.imagine.GoldenGateImagineConstants;
+import de.uka.ipd.idaho.im.imagine.plugins.ImageMarkupToolProvider;
 import de.uka.ipd.idaho.im.util.ImDocumentData;
 import de.uka.ipd.idaho.im.util.ImDocumentData.FolderImDocumentData;
 import de.uka.ipd.idaho.im.util.ImDocumentIO;
@@ -63,6 +64,7 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 	private static final String CONFIG_HOST_PARAMETER = "CONFHOST";
 	private static final String CONFIG_NAME_PARAMETER = "CONFNAME";
 	private static final String TOOL_SEQUENCE_PARAMETER = "TOOLS";
+	private static final String LIST_TOOLS_SEQUENCE_NAME = "LISTTOOLS";
 	private static final String WAIVE_DOCUMENT_SYTLE_PARAMETER = "WAIVEDS";
 	private static final String VERBOSE_PARAMETER = "VERBOSE";
 	private static final String USE_SINGLE_CORE_PARAMETER = "SINGLECORE";
@@ -177,6 +179,25 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 		GoldenGateImagine goldenGateImagine = GoldenGateImagine.openGoldenGATE(ggiConfig, basePath, false);
 		sysOut.println("GoldenGATE Imagine core created, configuration is " + ggiConfigName);
 		
+		//	list markup tools
+		if (LIST_TOOLS_SEQUENCE_NAME.equals(imtNameString)) {
+			ImageMarkupToolProvider[] imtps = goldenGateImagine.getImageMarkupToolProviders();
+			for (int p = 0; p < imtps.length; p++) {
+				String imtpName = imtps[p].getMainMenuTitle();
+				if (imtpName == null)
+					imtpName = imtps[p].getPluginName();
+				if (imtpName == null)
+					continue;
+				String[] pImtNames = imtps[p].getToolsMenuItemNames();
+				if(pImtNames.length == 0)
+					continue;
+				sysOut.println("MTP:" + imtpName + " (" + pImtNames.length + "):");
+				for (int t = 0; t < pImtNames.length; t++)
+					sysOut.println("MT: - " + pImtNames[t]);
+			}
+			System.exit(0);
+		}
+		
 		//	get individual image markup tools
 		ImageMarkupTool[] imts = new ImageMarkupTool[imtNames.length];
 		for (int t = 0; t < imtNames.length; t++) {
@@ -196,8 +217,10 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 		try {
 			
 			//	load document from folder
-			ImDocumentData docData = new FolderImDocumentData(new File(docRootPath), null);
+			File docFolder = new File(docRootPath);
+			ImDocumentData docData = new FolderImDocumentData(docFolder, null);
 			ImDocument doc = ImDocumentIO.loadDocument(docData, pm);
+			goldenGateImagine.notifyDocumentOpened(doc, docFolder, pm);
 			
 			//	test if document style detected
 			if (requireDocStyle) {
@@ -215,7 +238,10 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 			}
 			
 			//	store updates
+			goldenGateImagine.notifyDocumentSaving(doc, docFolder, pm);
 			ImDocumentIO.storeDocument(doc, docData, pm);
+			goldenGateImagine.notifyDocumentSaved(doc, docFolder, pm);
+			goldenGateImagine.notifyDocumentClosed(doc.docId);
 		}
 		
 		//	catch and log whatever might go wrong

@@ -41,7 +41,7 @@ import de.uka.ipd.idaho.stringUtils.csvHandler.StringRelation;
 import de.uka.ipd.idaho.stringUtils.csvHandler.StringTupel;
 
 /**
- * List of documents in a GoldenGATE DIO, residing in memory to facilitate
+ * List of documents in a GoldenGATE IMS, residing in memory to facilitate
  * sorting and the like in a client side document listing.
  * 
  * @author sautter
@@ -65,7 +65,7 @@ public class ImsDocumentListBuffer extends StringRelation implements GoldenGateI
 	
 	/**
 	 * Constructor building a buffered document list around an iterator-style
-	 * one, transfering all document list elements from the latter into the
+	 * one, transferring all document list elements from the latter into the
 	 * buffer, thereby consuming them from the argument list's getNextDocument()
 	 * method until the hasNextDocument() method returns false.
 	 * @param data the source document list
@@ -76,7 +76,7 @@ public class ImsDocumentListBuffer extends StringRelation implements GoldenGateI
 	
 	/**
 	 * Constructor building a buffered document list around an iterator-style
-	 * one, transfering all document list elements from the latter into the
+	 * one, transferring all document list elements from the latter into the
 	 * buffer, thereby consuming them from the argument list's getNextDocument()
 	 * method until the hasNextDocument() method returns false.
 	 * @param data the source document list

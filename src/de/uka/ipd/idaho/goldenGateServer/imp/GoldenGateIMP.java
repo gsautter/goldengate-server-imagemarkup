@@ -38,11 +38,13 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
-import java.util.LinkedList;
 import java.util.Set;
 
+import de.uka.ipd.idaho.easyIO.sql.TableColumnDefinition;
+import de.uka.ipd.idaho.easyIO.sql.TableDefinition;
 import de.uka.ipd.idaho.gamta.Attributed;
 import de.uka.ipd.idaho.gamta.util.imaging.DocumentStyle;
 import de.uka.ipd.idaho.goldenGateServer.AbstractGoldenGateServerComponent;
@@ -52,6 +54,7 @@ import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateIMS.ImsDocumentData;
 import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateImsConstants.ImsDocumentEvent;
 import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateImsConstants.ImsDocumentEvent.ImsDocumentEventListener;
 import de.uka.ipd.idaho.goldenGateServer.ims.util.StandaloneDocumentStyleProvider;
+import de.uka.ipd.idaho.goldenGateServer.util.AsynchronousDataActionHandler;
 import de.uka.ipd.idaho.im.ImAnnotation;
 import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.util.ImDocumentData.FolderImDocumentData;
@@ -77,6 +80,7 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 	
 	private File workingFolder;
 	private File cacheFolder;
+	private AsynchronousDataActionHandler documentProcessor;
 	
 	private String ggiConfigHost;
 	private String ggiConfigName;
@@ -119,6 +123,7 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		this.batchImTools = this.batchImTools.replaceAll("\\s+", "+");
 		
 		//	make document style templates available
+		//	TODO load this on first use (won't work before ECS is up and available)
 		this.docStyleListUrl = this.configuration.getSetting("docStyleListUrl");
 		if (this.docStyleListUrl == null)
 			throw new RuntimeException("Cannot work without document style templates, URL missing");
@@ -146,12 +151,10 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		this.installJar("ImageMarkup.jar");
 		this.installJar("ImageMarkup.bin.jar");
 		this.installJar("ImageMarkupOCR.jar");
-//		this.installJar("ImageMarkupOCR.bin.jar");
 		
 		//	install PDF decoder JARs
 		this.installJar("icepdf-core.jar");
 		this.installJar("ImageMarkupPDF.jar");
-//		this.installJar("ImageMarkupPDF.bin.jar");
 		
 		//	install GG Imagine JARs
 		this.installJar("GoldenGATE.jar");
@@ -159,6 +162,30 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		
 		//	install GGI slave JAR
 		this.installJar("GgServerImpSlave.jar");
+		
+		//	create asynchronous worker
+		TableColumnDefinition[] argCols = {
+			new TableColumnDefinition("ImtName", TableDefinition.VARCHAR_DATATYPE, 64),
+			new TableColumnDefinition("WaiveStyle", TableDefinition.CHAR_DATATYPE, 1),
+			new TableColumnDefinition("LogVerbose", TableDefinition.CHAR_DATATYPE, 1)
+		};
+		this.documentProcessor = new AsynchronousDataActionHandler("Imp", argCols, this, this.host.getIoProvider()) {
+			protected void performDataAction(String dataId, String[] arguments) throws Exception {
+				String imtName = null;
+				boolean waiveStyle = false;
+				boolean verbose = false;
+				for (int a = 0; a < arguments.length; a++) {
+					if ("W".equals(arguments[a]))
+						waiveStyle = true;
+					else if ("V".equals(arguments[a]))
+						verbose = true;
+					else if ("F".equals(arguments[a])) {}
+					else if (arguments[a].length() != 0)
+						imtName = arguments[a];
+				}
+				processDocument(dataId, imtName, waiveStyle, verbose);
+			}
+		};
 		
 		//	TODO get list of documents from IMS
 		
@@ -221,18 +248,18 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 				if (!ide.sourceClassName.equals(GoldenGateIMS.class.getName()))
 					return;
 				Attributed docAttributes = ide.documentData.getDocumentAttributes();
-				System.out.println("GoldenGATE IMP: checking whether or not to process document " + docAttributes.getAttribute(ImDocument.DOCUMENT_NAME_ATTRIBUTE, ide.documentId));
+				logInfo("GoldenGATE IMP: checking whether or not to process document " + docAttributes.getAttribute(ImDocument.DOCUMENT_NAME_ATTRIBUTE, ide.documentId));
 				
 				//	let's not loop back on our own updates
 				if (updateUserName.equals(ide.user)) {
-					System.out.println(" ==> self-triggered update");
+					logInfo(" ==> self-triggered update");
 					return;
 				}
 				
 				//	only process documents that have not been worked on yet
 				ImAnnotation[] docAnnots = ide.documentData.getAnnotations();
 				if (docAnnots.length != 0) {
-					System.out.println(" ==> there are already annotations");
+					logInfo(" ==> there are already annotations");
 					imsUpdatedDocIDs.remove(ide.documentId);
 					return;
 				}
@@ -243,35 +270,39 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 					doc = ide.documentData.getDocument();
 				}
 				catch (IOException ioe) {
-					ide.writeLog("Could not investigate document: " + ioe.getMessage());
-					ioe.printStackTrace(System.out);
+					logError("Could not investigate document: " + ioe.getMessage());
+					logError(ioe);
 					return;
 				}
 				
 				//	test if we have a document style template
 				DocumentStyle docStyle = DocumentStyle.getStyleFor(doc);
 				if (docStyle.isEmpty()) {
-					System.out.println(" ==> document style template not found");
+					logInfo(" ==> document style template not found");
 					imsUpdatedDocIDs.remove(ide.documentId);
 					return;
 				}
 				
 				//	schedule processing document
 				imsUpdatedDocIDs.add(ide.documentId);
-				System.out.println(" ==> processing scheduled");
+				logInfo(" ==> processing scheduled for after release");
 			}
 			public void documentDeleted(ImsDocumentEvent dse) {}
 			public void documentReleased(ImsDocumentEvent dse) {
 				if (!dse.sourceClassName.equals(GoldenGateIMS.class.getName()))
 					return;
-				if (imsUpdatedDocIDs.remove(dse.documentId))
-					scheduleBatchRun(new BatchRunRequest(dse.documentId));
+				if (imsUpdatedDocIDs.remove(dse.documentId)) {
+//					scheduleBatchRun(new BatchRunRequest(dse.documentId));
+					String[] args = {"", "F", "F"};
+					documentProcessor.enqueueDataAction(dse.documentId, args);
+				}
 			}
 		});
 		
 		//	start processing handler thread
-		Thread batchRunner = new BatchRunnerThread();
-		batchRunner.start();
+//		Thread batchRunner = new BatchRunnerThread();
+//		batchRunner.start();
+		this.documentProcessor.start();
 	}
 	
 	private Set imsUpdatedDocIDs = Collections.synchronizedSet(new HashSet());
@@ -282,13 +313,15 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 	protected void exitComponent() {
 		
 		//	shut down processing handler thread
-		synchronized (this.batchRunQueue) {
-			this.batchRunQueue.clear();
-			this.batchRunQueue.notify();
-		}
+//		synchronized (this.batchRunQueue) {
+//			this.batchRunQueue.clear();
+//			this.batchRunQueue.notify();
+//		}
+		this.documentProcessor.shutdown();
 	}
 	
 	private static final String PROCESS_DOCUMENT_COMMAND = "process";
+	private static final String LIST_TOOLS_COMMAND = "tools";
 	private static final String QUEUE_SIZE_COMMAND = "queueSize";
 	
 	/*
@@ -296,19 +329,17 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 	 * @see de.goldenGateScf.ServerComponent#getActions()
 	 */
 	public ComponentAction[] getActions() {
-		ArrayList cal = new ArrayList();
+		ArrayList cal = new ArrayList(Arrays.asList(this.documentProcessor.getActions()));
 		ComponentAction ca;
 		
-		//	TODO add command listing available document processors
-		
-		//	schedule URL import (good for testing)
+		//	schedule processing a document
 		ca = new ComponentActionConsole() {
 			public String getActionCommand() {
 				return PROCESS_DOCUMENT_COMMAND;
 			}
 			public String[] getExplanation() {
 				String[] explanation = {
-						PROCESS_DOCUMENT_COMMAND + " <documentId> <toolName> <waiveStyle>",
+						PROCESS_DOCUMENT_COMMAND + " <documentId> <toolName> <waiveStyle> <verbose>",
 						"Schedule a document for batch processing:",
 						"- <documentId>: The ID of the document to process",
 						"- <toolName>: The name of a single Image Markup Tool to run (optional, defaults to whole configured batch)",
@@ -318,15 +349,67 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 				return explanation;
 			}
 			public void performActionConsole(String[] arguments) {
-				if (arguments.length == 1)
-					scheduleBatchRun(new BatchRunRequest(arguments[0]));
-				else if (arguments.length == 2)
-					scheduleBatchRun(new BatchRunRequest(arguments[0], arguments[1], false, false));
-				else if (arguments.length == 3)
-					scheduleBatchRun(new BatchRunRequest(arguments[0], arguments[1], "-wds".equals(arguments[2]), "-v".equals(arguments[2])));
-				else if (arguments.length == 4)
-					scheduleBatchRun(new BatchRunRequest(arguments[0], arguments[1], ("-wds".equals(arguments[2]) || "-wds".equals(arguments[3])), ("-v".equals(arguments[2]) || "-v".equals(arguments[3]))));
-				else System.out.println(" Invalid arguments for '" + this.getActionCommand() + "', specify the document ID, markup tool name, document style waiver, and verbosity as the only arguments.");
+//				if (arguments.length == 1)
+//					scheduleBatchRun(new BatchRunRequest(arguments[0]));
+//				else if (arguments.length == 2)
+//					scheduleBatchRun(new BatchRunRequest(arguments[0], arguments[1], false, false));
+//				else if (arguments.length == 3)
+//					scheduleBatchRun(new BatchRunRequest(arguments[0], arguments[1], "-wds".equals(arguments[2]), "-v".equals(arguments[2])));
+//				else if (arguments.length == 4)
+//					scheduleBatchRun(new BatchRunRequest(arguments[0], arguments[1], ("-wds".equals(arguments[2]) || "-wds".equals(arguments[3])), ("-v".equals(arguments[2]) || "-v".equals(arguments[3]))));
+				if (arguments.length == 0)
+					this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify at least the document ID.");
+				else if (arguments.length < 4) {
+					String imtName = null;
+					boolean waiveStyle = false;
+					boolean verbose = false;
+					for (int a = 1; a < arguments.length; a++) {
+						if ("-wds".equals(arguments[a]))
+							waiveStyle = true;
+						else if ("-v".equals(arguments[a]))
+							verbose = true;
+						else imtName = arguments[a];
+					}
+					String[] args = {
+						((imtName == null) ? "" : imtName),
+						(waiveStyle ? "W" : "F"),
+						(verbose ? "V" : "F")
+					};
+					documentProcessor.enqueueDataAction(arguments[0], args);
+				}
+				else this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify the document ID, markup tool name, document style waiver, and verbosity as the only arguments.");
+			}
+		};
+		cal.add(ca);
+		
+		//	list available document processors
+		ca = new ComponentActionConsole() {
+			public String getActionCommand() {
+				return LIST_TOOLS_COMMAND;
+			}
+			public String[] getExplanation() {
+				String[] explanation = {
+						LIST_TOOLS_COMMAND + " <reload> <providers>",
+						"List all available markup tools:",
+						"- <reload>: Set to '-r' to force reloading the list (optional)",
+						"- <providers>: Set to '-p' to only show tool providers (optional)"
+					};
+				return explanation;
+			}
+			public void performActionConsole(String[] arguments) {
+				boolean forceReload = false;
+				boolean providersOnly = false;
+				String providerPrefix = null;
+				for (int a = 0; a < arguments.length; a++) {
+					if ("-r".equals(arguments[a]))
+						forceReload = true;
+					else if ("-p".equals(arguments[a]))
+						providersOnly = true;
+					else if (providerPrefix == null)
+						providerPrefix = arguments[a];
+					else providerPrefix = (providerPrefix + " " + arguments[a]);
+				}
+				listMarkupTools(forceReload, providersOnly, providerPrefix, this);
 			}
 		};
 		cal.add(ca);
@@ -345,8 +428,8 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 			}
 			public void performActionConsole(String[] arguments) {
 				if (arguments.length == 0)
-					System.out.println(batchRunQueue.size() + " documents waiting to be processed.");
-				else System.out.println(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
+					this.reportResult(documentProcessor.getDataActionsPending() + " documents waiting to be processed.");
+				else this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
 			}
 		};
 		cal.add(ca);
@@ -355,93 +438,307 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		return ((ComponentAction[]) cal.toArray(new ComponentAction[cal.size()]));
 	}
 	
-	private static class BatchRunRequest {
-		final String documentId;
-		final String imtName;
-		final boolean waiveStyle;
-		final boolean verbose;
-		BatchRunRequest(String documentId) {
-			this(documentId, null, false, false);
+	private String[][] markupToolList = null;
+	private void listMarkupTools(boolean forceReload, boolean providersOnly, String providerPrefix, ComponentActionConsole cac) {
+		
+		//	load document processor list on demand
+		if ((this.markupToolList == null) || forceReload) try {
+			this.markupToolList = this.loadMarkupToolList(cac);
 		}
-		BatchRunRequest(String documentId, String imtName, boolean waiveStyle, boolean verbose) {
-			this.documentId = documentId;
-			this.imtName = imtName;
-			this.waiveStyle = waiveStyle;
-			this.verbose = verbose;
+		catch (IOException ioe) {
+			cac.reportError("Could not load markup tool list: " + ioe.getMessage());
+			cac.reportError(ioe);
+			return;
 		}
-	}
-	
-	private LinkedList batchRunQueue = new LinkedList() {
-		private HashSet deduplicator = new HashSet();
-		public Object removeFirst() {
-			Object e = super.removeFirst();
-			this.deduplicator.remove(e);
-			return e;
-		}
-		public void addLast(Object e) {
-			if (this.deduplicator.add(e))
-				super.addLast(e);
-		}
-	};
-	private void scheduleBatchRun(BatchRunRequest brr) {
-		synchronized (this.batchRunQueue) {
-			this.batchRunQueue.addLast(brr);
-			this.batchRunQueue.notify();
-		}
-	}
-	private BatchRunRequest getBatchRun() {
-		synchronized (this.batchRunQueue) {
-			if (this.batchRunQueue.isEmpty()) try {
-				this.batchRunQueue.wait();
-			} catch (InterruptedException ie) {}
-			return (this.batchRunQueue.isEmpty() ? null : ((BatchRunRequest) this.batchRunQueue.removeFirst()));
+		
+		//	print out (filtered) document processor list
+		for (int m = 0; m < this.markupToolList.length; m++) {
+			if ((providerPrefix != null) && !this.markupToolList[m][0].startsWith(providerPrefix))
+				continue;
+			cac.reportResult(this.markupToolList[m][0]);
+			if (providersOnly)
+				continue;
+			for (int p = 1; p < this.markupToolList[m].length; p++)
+				cac.reportResult(this.markupToolList[m][p]);
 		}
 	}
 	
-	private class BatchRunnerThread extends Thread {
-		public void run() {
-			
-			//	don't start right away
-			try {
-				sleep(1000 * 15);
-			} catch (InterruptedException ie) {}
-			
-			//	keep going until shutdown
-			while (true) {
-				
-				//	get next document processing request to process
-				BatchRunRequest brr = getBatchRun();
-				if (brr == null)
-					return; // only happens on shutdown
-				
-				//	process document
-				long brrStart = System.currentTimeMillis();
+	private String[][] loadMarkupToolList(final ComponentActionConsole cac) throws IOException {
+		cac.reportResult("Loading markup tool list ...");
+		
+		//	assemble command
+		StringVector command = new StringVector();
+		command.addElement("java");
+		command.addElement("-jar");
+		command.addElement("-Xmx1024m");
+		command.addElement("GgServerImpSlave.jar");
+		
+		//	add parameters
+		if (this.ggiConfigHost != null)
+			command.addElement("CONFHOST=" + this.ggiConfigHost); // config host (if any)
+		command.addElement("CONFNAME=" + this.ggiConfigName); // config name
+		command.addElement("TOOLS=" + "LISTTOOLS"); // constant returning list
+		command.addElement("SINGLECORE"); // run on single CPU core only (we don't want to knock out the whole server, do we?)
+		
+		//	start batch processor slave process
+		Process processing = Runtime.getRuntime().exec(command.toStringArray(), new String[0], this.workingFolder);
+		
+		//	loop through error messages
+		final BufferedReader processorError = new BufferedReader(new InputStreamReader(processing.getErrorStream()));
+		new Thread() {
+			public void run() {
 				try {
-					handleBatchRun(brr);
+					for (String errorLine; (errorLine = processorError.readLine()) != null;)
+						cac.reportError(errorLine);
 				}
 				catch (Exception e) {
-					e.printStackTrace(System.out);
+					cac.reportError(e);
 				}
-				
-				//	give the others a little time
-				try {
-					sleep(Math.max((1000 * 5), (System.currentTimeMillis() - brrStart)));
-				} catch (InterruptedException ie) {}
 			}
+		}.start();
+		
+		//	collect Image Markup tool listing
+		ArrayList markupToolProviderList = new ArrayList();
+		ArrayList markupToolList = new ArrayList();
+		BufferedReader processorIn = new BufferedReader(new InputStreamReader(processing.getInputStream()));
+		for (String inLine; (inLine = processorIn.readLine()) != null;) {
+			if (inLine.startsWith("MTP:")) {
+				if (markupToolList.size() != 0)
+					markupToolProviderList.add(markupToolList.toArray(new String[markupToolList.size()]));
+				markupToolList.clear();
+				markupToolList.add(inLine.substring("MTP:".length()));
+			}
+			else if (inLine.startsWith("MT:"))
+				markupToolList.add(inLine.substring("MT:".length()));
+			else cac.reportResult(inLine);
 		}
+		if (markupToolList.size() != 0)
+			markupToolProviderList.add(markupToolList.toArray(new String[markupToolList.size()]));
+		
+		//	wait for process to finish
+		while (true) try {
+			processing.waitFor();
+			break;
+		} catch (InterruptedException ie) {}
+		
+		//	finally ...
+		return ((String[][]) markupToolProviderList.toArray(new String[markupToolProviderList.size()][]));
 	}
+//	
+//	private static class BatchRunRequest {
+//		final String documentId;
+//		final String imtName;
+//		final boolean waiveStyle;
+//		final boolean verbose;
+//		BatchRunRequest(String documentId) {
+//			this(documentId, null, false, false);
+//		}
+//		BatchRunRequest(String documentId, String imtName, boolean waiveStyle, boolean verbose) {
+//			this.documentId = documentId;
+//			this.imtName = imtName;
+//			this.waiveStyle = waiveStyle;
+//			this.verbose = verbose;
+//		}
+//	}
+//	
+//	private LinkedList batchRunQueue = new LinkedList() {
+//		private HashSet deduplicator = new HashSet();
+//		public Object removeFirst() {
+//			Object e = super.removeFirst();
+//			this.deduplicator.remove(e);
+//			return e;
+//		}
+//		public void addLast(Object e) {
+//			if (this.deduplicator.add(e))
+//				super.addLast(e);
+//		}
+//	};
+//	private void scheduleBatchRun(BatchRunRequest brr) {
+//		synchronized (this.batchRunQueue) {
+//			this.batchRunQueue.addLast(brr);
+//			this.batchRunQueue.notify();
+//		}
+//	}
+//	private BatchRunRequest getBatchRun() {
+//		synchronized (this.batchRunQueue) {
+//			if (this.batchRunQueue.isEmpty()) try {
+//				this.batchRunQueue.wait();
+//			} catch (InterruptedException ie) {}
+//			return (this.batchRunQueue.isEmpty() ? null : ((BatchRunRequest) this.batchRunQueue.removeFirst()));
+//		}
+//	}
+//	
+//	private class BatchRunnerThread extends Thread {
+//		public void run() {
+//			
+//			//	don't start right away
+//			try {
+//				sleep(1000 * 15);
+//			} catch (InterruptedException ie) {}
+//			
+//			//	keep going until shutdown
+//			while (true) {
+//				
+//				//	get next document processing request to process
+//				BatchRunRequest brr = getBatchRun();
+//				if (brr == null)
+//					return; // only happens on shutdown
+//				
+//				//	process document
+//				long brrStart = System.currentTimeMillis();
+//				try {
+//					handleBatchRun(brr);
+//				}
+//				catch (Exception e) {
+//					e.printStackTrace(System.out);
+//				}
+//				
+//				//	give the others a little time
+//				try {
+//					sleep(Math.max((1000 * 5), (System.currentTimeMillis() - brrStart)));
+//				} catch (InterruptedException ie) {}
+//			}
+//		}
+//	}
+//	
+//	private void handleBatchRun(BatchRunRequest brr) throws IOException {
+//		
+//		//	check out document as data
+//		ImsDocumentData docData = this.ims.checkoutDocumentAsData(this.updateUserName, brr.documentId);
+//		
+//		//	create document cache folder
+//		File cacheFolder = new File(this.cacheFolder, ("cache-" + brr.documentId));
+//		cacheFolder.mkdirs();
+//		
+//		//	create document output folder
+//		File docFolder = new File(this.cacheFolder, ("doc-" + brr.documentId));
+//		docFolder.mkdirs();
+//		
+//		//	copy document to cache folder (only non-binary entries)
+//		FolderImDocumentData cDocData = new FolderImDocumentData(docFolder);
+//		ImDocumentEntry[] docEntries = docData.getEntries();
+//		for (int e = 0; e < docEntries.length; e++) {
+//			if (!docEntries[e].name.endsWith(".csv"))
+//				continue;
+//			InputStream docEntryIn = new BufferedInputStream(docData.getInputStream(docEntries[e]));
+//			OutputStream cDocEntryOut = new BufferedOutputStream(cDocData.getOutputStream(docEntries[e]));
+//			byte[] buffer = new byte[1024];
+//			for (int r; (r = docEntryIn.read(buffer, 0, buffer.length)) != -1;)
+//				cDocEntryOut.write(buffer, 0, r);
+//			cDocEntryOut.flush();
+//			cDocEntryOut.close();
+//			docEntryIn.close();
+//		}
+//		cDocData.storeEntryList();
+//		
+//		//	assemble command
+//		StringVector command = new StringVector();
+//		command.addElement("java");
+//		command.addElement("-jar");
+//		command.addElement("-Xmx1024m");
+//		command.addElement("GgServerImpSlave.jar");
+//		
+//		//	add parameters
+//		command.addElement("DATA=" + docFolder.getAbsolutePath()); // document folder
+//		command.addElement("CACHE=" + cacheFolder.getAbsolutePath()); // cache folder
+//		if (this.ggiConfigHost != null)
+//			command.addElement("CONFHOST=" + this.ggiConfigHost); // config host (if any)
+//		command.addElement("CONFNAME=" + this.ggiConfigName); // config name
+//		command.addElement("TOOLS=" + ((brr.imtName == null) ? this.batchImTools : brr.imtName)); // IM tool(s) to run
+//		if (brr.waiveStyle && (brr.imtName != null))
+//			command.addElement("WAIVEDS"); // waive requiring document style only for single IM tool
+//		if (brr.verbose && (brr.imtName != null))
+//			command.addElement("VERBOSE"); // loop through all output (good for debugging)
+//		command.addElement("SINGLECORE"); // run on single CPU core only (we don't want to knock out the whole server, do we?)
+//		
+//		//	start batch processor slave process
+//		Process batchRun = Runtime.getRuntime().exec(command.toStringArray(), new String[0], this.workingFolder);
+//		
+//		//	loop through error messages
+//		final BufferedReader importerError = new BufferedReader(new InputStreamReader(batchRun.getErrorStream()));
+//		new Thread() {
+//			public void run() {
+//				try {
+//					for (String errorLine; (errorLine = importerError.readLine()) != null;)
+//						System.out.println(errorLine);
+//				}
+//				catch (Exception e) {
+//					e.printStackTrace(System.out);
+//				}
+//			}
+//		}.start();
+//		
+//		//	TODO catch request for further document entries on input stream ...
+//		//	TODO ... and move them to cache on demand ...
+//		//	TODO ... sending 'ready' message back through process output stream
+//		//	TODO test command: process 6229FF8AD22B0336DF54FFD7FFD3FF8E
+//		
+//		//	loop through step information only
+//		BufferedReader importerIn = new BufferedReader(new InputStreamReader(batchRun.getInputStream()));
+//		for (String inLine; (inLine = importerIn.readLine()) != null;) {
+//			if (inLine.startsWith("S:"))
+//				System.out.println(inLine.substring("S:".length()));
+//			else if (inLine.startsWith("I:")) {}
+//			else if (inLine.startsWith("P:")) {}
+//			else if (inLine.startsWith("BP:")) {}
+//			else if (inLine.startsWith("MP:")) {}
+//			else System.out.println(inLine);
+//		}
+//		
+//		//	wait for batch process to finish
+//		while (true) try {
+//			batchRun.waitFor();
+//			break;
+//		} catch (InterruptedException ie) {}
+//		
+//		//	copy back modified entries
+//		cDocData = new FolderImDocumentData(docFolder, null);
+//		ImDocumentEntry[] cDocEntries = cDocData.getEntries();
+//		boolean docModified = false;
+//		System.out.println("Document " + brr.documentId + " processed, copying back entries:");
+//		for (int e = 0; e < cDocEntries.length; e++) {
+//			ImDocumentEntry docEntry = docData.getEntry(cDocEntries[e].name);
+//			if ((docEntry != null) && docEntry.dataHash.equals(cDocEntries[e].dataHash)) {
+//				System.out.println(" - " + cDocEntries[e].name + " ==> unmodified");
+//				continue; // this entry exists and didn't change
+//			}
+//			InputStream cDocEntryIn = new BufferedInputStream(cDocData.getInputStream(cDocEntries[e]));
+//			OutputStream docEntryOut = new BufferedOutputStream(docData.getOutputStream(cDocEntries[e]));
+//			byte[] buffer = new byte[1024];
+//			for (int r; (r = cDocEntryIn.read(buffer, 0, buffer.length)) != -1;)
+//				docEntryOut.write(buffer, 0, r);
+//			docEntryOut.flush();
+//			docEntryOut.close();
+//			cDocEntryIn.close();
+//			docModified = true;
+//			System.out.println(" - " + cDocEntries[e].name + " ==> modified");
+//		}
+//		
+//		//	update and release document in IMS
+//		if (docModified)
+//			this.ims.updateDocumentFromData(this.updateUserName, this.updateUserName, docData, new EventLogger() {
+//				public void writeLog(String logEntry) {
+//					System.out.println(logEntry);
+//				}
+//			});
+//		this.ims.releaseDocument(this.updateUserName, brr.documentId);
+//		
+//		//	clean up cache and document data
+//		this.cleanupFile(cacheFolder);
+//		this.cleanupFile(docFolder);
+//	}
 	
-	private void handleBatchRun(BatchRunRequest brr) throws IOException {
+	private void processDocument(String docId, String imtName, boolean waiveStyle, boolean verbose) throws IOException {
 		
 		//	check out document as data
-		ImsDocumentData docData = this.ims.checkoutDocumentAsData(this.updateUserName, brr.documentId);
+		ImsDocumentData docData = this.ims.checkoutDocumentAsData(this.updateUserName, docId);
 		
 		//	create document cache folder
-		File cacheFolder = new File(this.cacheFolder, ("cache-" + brr.documentId));
+		File cacheFolder = new File(this.cacheFolder, ("cache-" + docId));
 		cacheFolder.mkdirs();
 		
 		//	create document output folder
-		File docFolder = new File(this.cacheFolder, ("doc-" + brr.documentId));
+		File docFolder = new File(this.cacheFolder, ("doc-" + docId));
 		docFolder.mkdirs();
 		
 		//	copy document to cache folder (only non-binary entries)
@@ -474,10 +771,10 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		if (this.ggiConfigHost != null)
 			command.addElement("CONFHOST=" + this.ggiConfigHost); // config host (if any)
 		command.addElement("CONFNAME=" + this.ggiConfigName); // config name
-		command.addElement("TOOLS=" + ((brr.imtName == null) ? this.batchImTools : brr.imtName)); // IM tool(s) to run
-		if (brr.waiveStyle && (brr.imtName != null))
+		command.addElement("TOOLS=" + ((imtName == null) ? this.batchImTools : imtName)); // IM tool(s) to run
+		if (waiveStyle && (imtName != null))
 			command.addElement("WAIVEDS"); // waive requiring document style only for single IM tool
-		if (brr.verbose && (brr.imtName != null))
+		if (verbose && (imtName != null))
 			command.addElement("VERBOSE"); // loop through all output (good for debugging)
 		command.addElement("SINGLECORE"); // run on single CPU core only (we don't want to knock out the whole server, do we?)
 		
@@ -490,10 +787,10 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 			public void run() {
 				try {
 					for (String errorLine; (errorLine = importerError.readLine()) != null;)
-						System.out.println(errorLine);
+						logError(errorLine);
 				}
 				catch (Exception e) {
-					e.printStackTrace(System.out);
+					logError(e);
 				}
 			}
 		}.start();
@@ -507,12 +804,12 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		BufferedReader importerIn = new BufferedReader(new InputStreamReader(batchRun.getInputStream()));
 		for (String inLine; (inLine = importerIn.readLine()) != null;) {
 			if (inLine.startsWith("S:"))
-				System.out.println(inLine.substring("S:".length()));
+				logInfo(inLine.substring("S:".length()));
 			else if (inLine.startsWith("I:")) {}
 			else if (inLine.startsWith("P:")) {}
 			else if (inLine.startsWith("BP:")) {}
 			else if (inLine.startsWith("MP:")) {}
-			else System.out.println(inLine);
+			else logInfo(inLine);
 		}
 		
 		//	wait for batch process to finish
@@ -525,11 +822,11 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		cDocData = new FolderImDocumentData(docFolder, null);
 		ImDocumentEntry[] cDocEntries = cDocData.getEntries();
 		boolean docModified = false;
-		System.out.println("Document " + brr.documentId + " processed, copying back entries:");
+		logInfo("Document " + docId + " processed, copying back entries:");
 		for (int e = 0; e < cDocEntries.length; e++) {
 			ImDocumentEntry docEntry = docData.getEntry(cDocEntries[e].name);
 			if ((docEntry != null) && docEntry.dataHash.equals(cDocEntries[e].dataHash)) {
-				System.out.println(" - " + cDocEntries[e].name + " ==> unmodified");
+				logInfo(" - " + cDocEntries[e].name + " ==> unmodified");
 				continue; // this entry exists and didn't change
 			}
 			InputStream cDocEntryIn = new BufferedInputStream(cDocData.getInputStream(cDocEntries[e]));
@@ -541,17 +838,17 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 			docEntryOut.close();
 			cDocEntryIn.close();
 			docModified = true;
-			System.out.println(" - " + cDocEntries[e].name + " ==> modified");
+			logInfo(" - " + cDocEntries[e].name + " ==> modified");
 		}
 		
 		//	update and release document in IMS
 		if (docModified)
 			this.ims.updateDocumentFromData(this.updateUserName, this.updateUserName, docData, new EventLogger() {
 				public void writeLog(String logEntry) {
-					System.out.println(logEntry);
+					logInfo(logEntry);
 				}
 			});
-		this.ims.releaseDocument(this.updateUserName, brr.documentId);
+		this.ims.releaseDocument(this.updateUserName, docId);
 		
 		//	clean up cache and document data
 		this.cleanupFile(cacheFolder);

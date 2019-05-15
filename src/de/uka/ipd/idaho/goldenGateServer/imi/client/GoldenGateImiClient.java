@@ -40,8 +40,9 @@ import de.uka.ipd.idaho.goldenGateServer.imi.GoldenGateImiConstants;
 import de.uka.ipd.idaho.goldenGateServer.util.BufferedLineOutputStream;
 
 /**
+ * Client object for GoldenGATE IMI.
+ * 
  * @author sautter
- *
  */
 public class GoldenGateImiClient implements GoldenGateImiConstants {
 	

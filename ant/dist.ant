@@ -5,10 +5,9 @@
 -->
 
 <project name="dist">
-	<target name="zips" depends="backenddocszip,imsdociojar">
-	</target>
+	<target name="zips" depends="backenddocszip,imsdociojar,imecltjar" />
 	
-	<target name="backenddocszip" depends="imsjar,imrjar,imijar,imipdfjar,imipdfslavejar,impjar,impslavejar">
+	<target name="backenddocszip" depends="imsjar,imrjar,imejar,imijar,imipdfjar,imipdfslavejar,impjar,impslavejar">
 		<delete file="${pack.serverim}"/>
 		<zip destfile="${pack.serverim}">
 			<fileset dir="${dist.home}" includes="Components/**/**" />
@@ -46,6 +45,21 @@
 		</jar>
 	</target>
 	
+	<target name="imejar">
+		<delete file="${jar.ime}" />
+		<jar destfile="${jar.ime}" manifest="${file.home}/MANIFEST.components.MF">
+			<fileset dir="${build.home}/classes">
+				<include name="**/goldenGateServer/ime/*.class" />
+				<include name="**/goldenGateServer/ime/data/*.class" />
+			</fileset>
+			<fileset dir="${src.home}">
+				<include name="**/goldenGateServer/ime/*.java" />
+				<include name="**/goldenGateServer/ime/data/*.java" />
+			</fileset>
+			<fileset dir="." includes="LICENSE.txt"/>
+		</jar>
+	</target>
+	
 	<target name="check-ggi" unless="ggi.exists">
 		<condition property="ggi.exists">
 			<and>
@@ -54,6 +68,7 @@
 			</and>
 		</condition> 
 	</target>
+	
 	<target name="imsdociojar" depends="check-ggi" if="${ggi.exists}">
 		<delete file="${jar.imsdocio}" />
 		<jar destfile="${jar.imsdocio}" manifest="${file.home}/MANIFEST.components.MF">
@@ -64,6 +79,31 @@
 				<include name="**/goldenGateServer/ims/data/*.class" />
 			</fileset>
 			<fileset dir="${src.home}">
+				<include name="**/goldenGateServer/ims/GoldenGateImsConstants.java" />
+				<include name="**/goldenGateServer/ims/client/GoldenGateImsClient.java" />
+				<include name="**/goldenGateServer/ims/client/GoldenGateImsDocumentIO.java" />
+				<include name="**/goldenGateServer/ims/data/*.java" />
+			</fileset>
+			<fileset dir="." includes="LICENSE.txt"/>
+		</jar>
+	</target>
+	
+	<target name="imecltjar" depends="check-ggi" if="${ggi.exists}">
+		<delete file="${jar.imeclt}" />
+		<jar destfile="${jar.imeclt}" manifest="${file.home}/MANIFEST.components.MF">
+			<fileset dir="${build.home}/classes">
+				<include name="**/goldenGateServer/ime/GoldenGateImeConstants*.class" />
+				<include name="**/goldenGateServer/ime/client/GoldenGateImeClient*.class" />
+				<include name="**/goldenGateServer/ime/data/*.class" />
+				<include name="**/goldenGateServer/ims/GoldenGateImsConstants*.class" />
+				<include name="**/goldenGateServer/ims/client/GoldenGateImsClient*.class" />
+				<include name="**/goldenGateServer/ims/client/GoldenGateImsDocumentIO*.class" />
+				<include name="**/goldenGateServer/ims/data/*.class" />
+			</fileset>
+			<fileset dir="${src.home}">
+				<include name="**/goldenGateServer/ime/GoldenGateImeConstants.java" />
+				<include name="**/goldenGateServer/ime/client/GoldenGateImeClient.java" />
+				<include name="**/goldenGateServer/ime/data/*.java" />
 				<include name="**/goldenGateServer/ims/GoldenGateImsConstants.java" />
 				<include name="**/goldenGateServer/ims/client/GoldenGateImsClient.java" />
 				<include name="**/goldenGateServer/ims/client/GoldenGateImsDocumentIO.java" />

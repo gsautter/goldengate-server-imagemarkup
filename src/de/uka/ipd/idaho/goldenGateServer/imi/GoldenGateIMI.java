@@ -29,25 +29,23 @@ package de.uka.ipd.idaho.goldenGateServer.imi;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
-import java.io.BufferedReader;
-import java.io.BufferedWriter;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.io.OutputStreamWriter;
 import java.lang.reflect.Method;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
-import java.util.HashSet;
-import java.util.LinkedList;
 
+import de.uka.ipd.idaho.easyIO.IoProvider;
+import de.uka.ipd.idaho.easyIO.sql.TableColumnDefinition;
+import de.uka.ipd.idaho.easyIO.sql.TableDefinition;
 import de.uka.ipd.idaho.easyIO.streams.PeekInputStream;
 import de.uka.ipd.idaho.gamta.AnnotationUtils;
 import de.uka.ipd.idaho.gamta.AttributeUtils;
@@ -59,6 +57,7 @@ import de.uka.ipd.idaho.gamta.util.GamtaClassLoader.ComponentInitializer;
 import de.uka.ipd.idaho.goldenGateServer.AbstractGoldenGateServerComponent;
 import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateIMS;
 import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateIMS.ImsDocumentData;
+import de.uka.ipd.idaho.goldenGateServer.util.AsynchronousDataActionHandler;
 import de.uka.ipd.idaho.goldenGateServer.util.BufferedLineInputStream;
 import de.uka.ipd.idaho.goldenGateServer.util.BufferedLineOutputStream;
 import de.uka.ipd.idaho.im.ImDocument;
@@ -124,6 +123,33 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 			this.dataUrl = dataUrl;
 		}
 		
+		ImiDocumentImport(String[] arguments) throws IOException {
+			this.dataMimeType = arguments[2];
+			if ("F".equals(arguments[0])) {
+				this.dataFile = new File(arguments[1]);
+				this.deleteDataFile = "D".equals(arguments[3]);
+				this.dataUrl = null;
+			}
+			else if ("U".equals(arguments[0])) {
+				this.dataFile = null;
+				this.deleteDataFile = true;
+				this.dataUrl = new URL(arguments[1]);
+			}
+			else throw new IllegalArgumentException();
+			ImDocumentIO.setAttributes(this, arguments[4]);
+		}
+		
+		String[] getArguments() {
+			String[] arguments = {
+				((this.dataFile == null) ? "U" : "D"),
+				((this.dataFile == null) ? this.dataUrl.toString() : this.dataFile.getAbsolutePath()),
+				this.dataMimeType,
+				(this.deleteDataFile ? "D" : "R"),
+				ImDocumentIO.getAttributesString(this),
+			};
+			return arguments;
+		}
+		
 		/**
 		 * Retrieve the data file to import. If the import is from a URL, the
 		 * data is first downloaded and cached, and this method returns the
@@ -180,8 +206,8 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 				ims.uploadDocument(userName, doc, null);
 			}
 			catch (IOException ioe) {
-				System.out.println("Error storing document imported from " + this.toString() + ": " + ioe.getMessage());
-				ioe.printStackTrace(System.out);
+				logError("Error storing document imported from " + this.toString() + ": " + ioe.getMessage());
+				logError(ioe);
 			}
 			
 			//	clean up cached data file
@@ -233,8 +259,8 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 				ims.uploadDocumentFromData(userName, iDocData, null);
 			}
 			catch (IOException ioe) {
-				System.out.println("Error storing document imported from " + this.toString() + ": " + ioe.getMessage());
-				ioe.printStackTrace(System.out);
+				logError("Error storing document imported from " + this.toString() + ": " + ioe.getMessage());
+				logError(ioe);
 			}
 			
 			//	clean up cached data file
@@ -252,9 +278,9 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 		public void setError(Throwable error) {
 			
 			//	log error
-			System.out.println("Error importing document from " + this.toString() + ": " + error.getMessage());
-			error.printStackTrace(System.out);
-
+			logError("Error importing document from " + this.toString() + ": " + error.getMessage());
+			logError(error);
+			
 			//	clean up cached data file
 			//	TODO really delete on error?
 			if (this.deleteDataFile && (this.dataFile != null)) {
@@ -323,6 +349,8 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 	
 	private ImiDocumentImporter[] importers;
 	
+	private AsynchronousDataActionHandler importHandler;
+	
 	/** Constructor passing 'IMI' as the letter code to super constructor
 	 */
 	public GoldenGateIMI() {
@@ -363,6 +391,23 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 		 * - status (import pending, import error (download error, decoding error, unknown MIME type), imported, other (processed further, etc.))
 		 */
 		
+		//	use asynchronous action queue for imports (comes with persistence and can accommodate all the parameters once file is cached)
+		IoProvider io = this.host.getIoProvider();
+		if (!io.isJdbcAvailable())
+			throw new RuntimeException("GoldenGateIMI: Cannot work without database access.");
+		TableColumnDefinition[] argumentColumns = {
+			new TableColumnDefinition("DataType", TableDefinition.VARCHAR_DATATYPE, 1),
+			new TableColumnDefinition("DataFileOrUrl", TableDefinition.VARCHAR_DATATYPE, 256),
+			new TableColumnDefinition("MimeType", TableDefinition.VARCHAR_DATATYPE, 32),
+			new TableColumnDefinition("DeleteDataFile", TableDefinition.VARCHAR_DATATYPE, 1),
+			new TableColumnDefinition("DataAttributes", TableDefinition.VARCHAR_DATATYPE, 1536),
+		};
+		this.importHandler = new AsynchronousDataActionHandler("GoldenGateImi", argumentColumns, this, io) {
+			protected void performDataAction(String dataId, String[] arguments) throws Exception {
+				handleImport(new ImiDocumentImport(arguments));
+			}
+		};
+		
 		//	TODO allow users to see status of "their" documents
 		
 		//	TODO offer re-triggering non-completed imports (we might have a new decoder, or one with a former error fixed, etc.)
@@ -384,45 +429,48 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 	 * @see de.uka.ipd.idaho.goldenGateServer.AbstractGoldenGateServerComponent#linkInit()
 	 */
 	public void linkInit() {
-		
-		//	reload pending imports
-		File importFile = new File(this.dataPath, "imports.txt");
-		if (importFile.exists()) try {
-			BufferedReader importBr = new BufferedReader(new InputStreamReader(new FileInputStream(importFile), "UTF-8"));
-			for (String importData; (importData = importBr.readLine()) != null;) {
-				String[] importAttributes = importData.split("\\t");
-				if (importAttributes.length == 5) {
-					ImiDocumentImport di;
-					if ("".equals(importAttributes[0]))
-						di = new ImiDocumentImport(("".equals(importAttributes[2]) ? null : importAttributes[2]), new File(importAttributes[1]), "D".equals(importAttributes[3]));
-					else di = new ImiDocumentImport(("".equals(importAttributes[2]) ? null : importAttributes[2]), new URL(importAttributes[0]));
-					ImDocumentIO.setAttributes(di, importAttributes[4]);
-					this.enqueueImport(di);
-				}
-			}
-			importBr.close();
-		}
-		catch (Exception e) {
-			System.out.println("ImageMarkupImporter: Error restoring pending update events from file '" + importFile.getAbsolutePath() + "': " + e.getMessage());
-			e.printStackTrace(System.out);
-		}
+//		
+//		//	reload pending imports
+//		File importFile = new File(this.dataPath, "imports.txt");
+//		if (importFile.exists()) try {
+//			BufferedReader importBr = new BufferedReader(new InputStreamReader(new FileInputStream(importFile), "UTF-8"));
+//			for (String importData; (importData = importBr.readLine()) != null;) {
+//				String[] importAttributes = importData.split("\\t");
+//				if (importAttributes.length == 5) {
+//					ImiDocumentImport di;
+//					if ("".equals(importAttributes[0]))
+//						di = new ImiDocumentImport(("".equals(importAttributes[2]) ? null : importAttributes[2]), new File(importAttributes[1]), "D".equals(importAttributes[3]));
+//					else di = new ImiDocumentImport(("".equals(importAttributes[2]) ? null : importAttributes[2]), new URL(importAttributes[0]));
+//					ImDocumentIO.setAttributes(di, importAttributes[4]);
+//					this.enqueueImport(di);
+//				}
+//			}
+//			importBr.close();
+//		}
+//		catch (Exception e) {
+//			System.out.println("ImageMarkupImporter: Error restoring pending update events from file '" + importFile.getAbsolutePath() + "': " + e.getMessage());
+//			e.printStackTrace(System.out);
+//		}
 		
 		//	load importers
-		this.loadImporters(false);
+		this.loadImporters(null);
 		
 		//	start import handler thread
-		Thread importerThread = new ImporterThread();
-		importerThread.start();
+//		Thread importerThread = new ImporterThread();
+//		importerThread.start();
+		this.importHandler.start();
 	}
 	
-	private synchronized void loadImporters(boolean isReload) {
+	private synchronized void loadImporters(final ComponentActionConsole cac) {
 		
 		//	if reload, shut down importers
-		if (isReload)
-			this.shutdownImporters();
+		if (cac != null)
+			this.shutdownImporters(cac);
 		
 		//	load importers
-		System.out.println("Loading importers ...");
+		if (cac == null)
+			System.out.println("Loading importers ...");
+		else cac.reportResult("Loading importers ...");
 		Object[] importerObjects = GamtaClassLoader.loadComponents(
 				dataPath,
 				ImiDocumentImporter.class, 
@@ -432,7 +480,9 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 						if (!dataPath.exists())
 							dataPath.mkdir();
 						ImiDocumentImporter importer = ((ImiDocumentImporter) component);
-						System.out.println(" - initializing importer " + importer.getName() + " ...");
+						if (cac == null)
+							System.out.println(" - initializing importer " + importer.getName() + " ...");
+						else cac.reportResult(" - initializing importer " + importer.getName() + " ...");
 						File workingFolder = new File(GoldenGateIMI.this.workingFolder, importer.getName());
 						if (!workingFolder.exists())
 							workingFolder.mkdir();
@@ -445,10 +495,14 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 						importer.setParent(GoldenGateIMI.this);
 						importer.setHost(GoldenGateIMI.this.host);
 						importer.init();
-						System.out.println(" - importer " + importer.getName() + " initialized");
+						if (cac == null)
+							System.out.println(" - importer " + importer.getName() + " initialized");
+						else cac.reportResult(" - importer " + importer.getName() + " initialized");
 					}
 				});
-		System.out.println("Importers loaded");
+		if (cac == null)
+			System.out.println("Importers loaded");
+		else cac.reportResult("Importers loaded");
 		
 		//	store importers, and sort them by priority
 		ImiDocumentImporter[] importers = new ImiDocumentImporter[importerObjects.length];
@@ -464,70 +518,77 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 		
 		//	make importers available
 		this.importers = importers;
-		System.out.println("Importers registered");
+		if (cac == null)
+			System.out.println("Importers registered");
+		else cac.reportResult("Importers registered");
 	}
 	
-	private synchronized void shutdownImporters() {
+	private synchronized void shutdownImporters(ComponentActionConsole cac) {
 		
 		//	make importers private
 		ImiDocumentImporter[] importers = this.importers;
 		this.importers = null;
 		
 		//	shut down importers
-		System.out.println("Finalizing importers");
+		if (cac == null)
+			System.out.println("Finalizing importers");
+		else cac.reportResult("Finalizing importers");
 		for (int i = 0; i < importers.length; i++)
 			importers[i].exit();
-		System.out.println("Importers finalized");
+		if (cac == null)
+			System.out.println("Importers finalized");
+		else cac.reportResult("Importers finalized");
 	}
 	
 	/* (non-Javadoc)
 	 * @see de.uka.ipd.idaho.goldenGateServer.AbstractGoldenGateServerComponent#exitComponent()
 	 */
 	protected void exitComponent() {
-		
-		//	get pending imports
-		ArrayList imports = new ArrayList(this.importQueue);
-		
-		//	delete pending import file if empty
-		File importFile = new File(this.dataPath, "imports.txt");
-		if (imports.isEmpty()) {
-			if (importFile.exists()) try {
-				importFile.delete();
-			}
-			catch (Exception e) {
-				System.out.println("ImageMarkupImporter: Error deleting import file '" + importFile.getAbsolutePath() + "': " + e.getMessage());
-				e.printStackTrace(System.out);
-			}
-		}
-		
-		//	store any pending imports on disk
-		else try {
-			BufferedWriter importBw = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(importFile), "UTF-8"));
-			for (int i = 0; i < imports.size(); i++) {
-				ImiDocumentImport di = ((ImiDocumentImport) imports.get(i));
-				importBw.write((di.dataUrl == null) ? "" : di.dataUrl.toString());
-				importBw.write("\t" + ((di.dataFile == null) ? "" : di.dataFile.getAbsolutePath()));
-				importBw.write("\t" + ((di.dataMimeType == null) ? "" : di.dataMimeType));
-				importBw.write("\t" + (di.deleteDataFile ? "D" : "R"));
-				importBw.write("\t" + ImDocumentIO.getAttributesString(di));
-				importBw.newLine();
-			}
-			importBw.flush();
-			importBw.close();
-		}
-		catch (Exception e) {
-			System.out.println("ImageMarkupImporter: Error storing pending imports to file '" + importFile.getAbsolutePath() + "': " + e.getMessage());
-			e.printStackTrace(System.out);
-		}
+//		
+//		//	get pending imports
+//		ArrayList imports = new ArrayList(this.importQueue);
+//		
+//		//	delete pending import file if empty
+//		File importFile = new File(this.dataPath, "imports.txt");
+//		if (imports.isEmpty()) {
+//			if (importFile.exists()) try {
+//				importFile.delete();
+//			}
+//			catch (Exception e) {
+//				System.out.println("ImageMarkupImporter: Error deleting import file '" + importFile.getAbsolutePath() + "': " + e.getMessage());
+//				e.printStackTrace(System.out);
+//			}
+//		}
+//		
+//		//	store any pending imports on disk
+//		else try {
+//			BufferedWriter importBw = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(importFile), "UTF-8"));
+//			for (int i = 0; i < imports.size(); i++) {
+//				ImiDocumentImport di = ((ImiDocumentImport) imports.get(i));
+//				importBw.write((di.dataUrl == null) ? "" : di.dataUrl.toString());
+//				importBw.write("\t" + ((di.dataFile == null) ? "" : di.dataFile.getAbsolutePath()));
+//				importBw.write("\t" + ((di.dataMimeType == null) ? "" : di.dataMimeType));
+//				importBw.write("\t" + (di.deleteDataFile ? "D" : "R"));
+//				importBw.write("\t" + ImDocumentIO.getAttributesString(di));
+//				importBw.newLine();
+//			}
+//			importBw.flush();
+//			importBw.close();
+//		}
+//		catch (Exception e) {
+//			System.out.println("ImageMarkupImporter: Error storing pending imports to file '" + importFile.getAbsolutePath() + "': " + e.getMessage());
+//			e.printStackTrace(System.out);
+//		}
 		
 		//	shut down import handler thread
-		synchronized (this.importQueue) {
-			this.importQueue.clear();
-			this.importQueue.notify();
-		}
+//		synchronized (this.importQueue) {
+//			this.importQueue.clear();
+//			this.importQueue.notify();
+//		}
+		this.importHandler.shutdown();
 		
 		//	shut down importers
-		this.shutdownImporters();
+		this.shutdownImporters(null);
 	}
 	
 	private static final String IMPORT_DOCUMENT_COMMAND = "import";
@@ -539,7 +600,8 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 	 * @see de.goldenGateScf.ServerComponent#getActions()
 	 */
 	public ComponentAction[] getActions() {
-		ArrayList cal = new ArrayList();
+//		ArrayList cal = new ArrayList(this.importHandler.getActions());
+		ArrayList cal = new ArrayList(Arrays.asList(this.importHandler.getActions()));
 		ComponentAction ca;
 		
 		//	schedule import from URL, file, or folder (good for testing, and for trouble shooting)
@@ -559,7 +621,7 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 			}
 			public void performActionConsole(final String[] arguments) {
 				if (arguments.length == 0) {
-					System.out.println(" Invalid arguments for '" + this.getActionCommand() + "', specify at least the document URL and MIME type.");
+					this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify at least the document URL and MIME type.");
 					return;
 				}
 				
@@ -569,7 +631,7 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 					//	check file
 					final File docFile = new File(arguments[0]);
 					if (!docFile.exists()) {
-						System.out.println(" Invalid document file or folder '" + docFile.getAbsolutePath() + "', specify the absolute path.");
+						this.reportError(" Invalid document file or folder '" + docFile.getAbsolutePath() + "', specify the absolute path.");
 						return;
 					}
 					
@@ -577,7 +639,7 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 					if (docFile.isDirectory()) {
 						File docEntryFile = new File(docFile, "entries.txt");
 						if (!docEntryFile.exists()) {
-							System.out.println(" Invalid document folder '" + docFile.getAbsolutePath() + "', 'entries.txt' entry list file not found.");
+							this.reportError(" Invalid document folder '" + docFile.getAbsolutePath() + "', 'entries.txt' entry list file not found.");
 							return;
 						}
 						
@@ -588,12 +650,12 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 									storeDocument(docFile, readAttributes(arguments, 1));
 								}
 								catch (IOException ioe) {
-									System.out.println("Error storing document imported from " + docFile.getName() + ": " + ioe.getMessage());
-									ioe.printStackTrace(System.out);
+									reportError("Error storing document imported from " + docFile.getName() + ": " + ioe.getMessage());
+									reportError(ioe);
 								}
 							}
 						};
-						System.out.println(" Starting document import from folder '" + docFile.getAbsolutePath() + "'");
+						this.reportResult(" Starting document import from folder '" + docFile.getAbsolutePath() + "'");
 						importer.start();
 					}
 					
@@ -620,27 +682,45 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 										storeDocument(docFile, readAttributes(arguments, attributeStart));
 									}
 									catch (IOException ioe) {
-										System.out.println("Error storing document imported from " + docFile.getName() + ": " + ioe.getMessage());
-										ioe.printStackTrace(System.out);
+										reportError("Error storing document imported from " + docFile.getName() + ": " + ioe.getMessage());
+										reportError(ioe);
 									}
 								}
 							};
-							System.out.println(" Starting document import from file '" + docFile.getAbsolutePath() + "'");
+							this.reportResult(" Starting document import from file '" + docFile.getAbsolutePath() + "'");
 							importer.start();
 						}
 						
 						//	schedule other imports in normal queue
 						else if (mimeType == null) {
-							System.out.println(" Could not determine MIME type of '" + docFile.getAbsolutePath() + "', please specify explicitly in arguments.");
+							this.reportError(" Could not determine MIME type of '" + docFile.getAbsolutePath() + "', please specify explicitly in arguments.");
 							return;
 						}
 						
 						//	schedule other imports in normal queue
-						else scheduleImport(mimeType, docFile, readAttributes(arguments, attributeStart));
+						else {
+							
+							//	read binary data to compute hash
+							InputStream docIn = new BufferedInputStream(new FileInputStream(docFile));
+							DataHashOutputStream docHashOut = new DataHashOutputStream(new OutputStream() {
+								public void write(int b) throws IOException {}
+							});
+							byte[] buffer = new byte[1024];
+							for (int r; (r = docIn.read(buffer, 0, buffer.length)) != -1;)
+								docHashOut.write(buffer, 0, r);
+							docHashOut.flush();
+							docHashOut.close();
+							docIn.close();
+							String docId = docHashOut.getDataHash();
+							this.reportResult("Document UUID computed: " + docId);
+							
+							//	schedule import
+							scheduleImport(mimeType, docFile, docId, readAttributes(arguments, attributeStart));
+						}
 					}
 					catch (IOException ioe) {
-						System.out.println("Error importing document from " + docFile.getName() + ": " + ioe.getMessage());
-						ioe.printStackTrace(System.out);
+						this.reportError("Error importing document from " + docFile.getName() + ": " + ioe.getMessage());
+						this.reportError(ioe);
 					}
 				}
 				
@@ -662,11 +742,12 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 						scheduleImport(mimeType, new URL(arguments[0]), readAttributes(arguments, attributeStart));
 					}
 					catch (MalformedURLException mue) {
-						System.out.println(" '" + arguments[0] + "' is not a valid URL.");
+						this.reportError(" '" + arguments[0] + "' is not a valid URL.");
 					}
 				}
 			}
 			
+			//	TODO facilitate using IMD
 			private void storeDocument(File docFile, Attributed attributes) throws IOException {
 				
 				//	load document TODO when importing IMF, use cache folder to ease resource consumption
@@ -701,7 +782,7 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 				String user = input.readLine();
 				if (user.length() == 0)
 					user = defaultImportUserName;
-				System.out.println("Got user: " + user);
+				logInfo("Got user: " + user);
 				
 				//	read and check MIME type
 				String mimeType = input.readLine();
@@ -709,11 +790,11 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 					output.writeLine("Invalid MIME type '" + mimeType + "'");
 					return;
 				}
-				System.out.println("Got MIME type: " + mimeType);
+				logInfo("Got MIME type: " + mimeType);
 				
 				//	read data name
 				final int docDataSize = Integer.parseInt(input.readLine());
-				System.out.println("Got document size: " + docDataSize);
+				logInfo("Got document size: " + docDataSize);
 				
 				//	read data name
 				final String docDataNameOrUrl = input.readLine();
@@ -721,7 +802,7 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 					output.writeLine("Invalid document data " + ((docDataSize < 0) ? "URL" : "name") + " '" + docDataNameOrUrl + "'");
 					return;
 				}
-				System.out.println("Got document " + ((docDataSize < 0) ? "URL" : "name") + ": " + docDataNameOrUrl);
+				logInfo("Got document " + ((docDataSize < 0) ? "URL" : "name") + ": " + docDataNameOrUrl);
 				
 				//	read meta data (via string reading methods)
 				Attributed docAttributes = new AbstractAttributed();
@@ -741,7 +822,7 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 					
 					//	store attribute
 					docAttributes.setAttribute(an, av);
-					System.out.println("Attribute '" + an + "' set to '" + av + "'");
+					logInfo("Attribute '" + an + "' set to '" + av + "'");
 				}
 				
 				//	add user name to attributes
@@ -788,11 +869,11 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 					}
 					docCacheOut.flush();
 					docCacheOut.close();
-					System.out.println("Got " + docCacheBytes + " bytes of data");
+					logInfo("Got " + docCacheBytes + " bytes of data");
 					
 					//	compute MD5 hash document ID
 					docId = docCacheOut.getDataHash();
-					System.out.println("Document UUID computed: " + docId);
+					logInfo("Document UUID computed: " + docId);
 					
 					//	check if document already in database, and report back if so
 					Attributed exDocAttributes = null;
@@ -802,7 +883,7 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 					
 					//	schedule import if not imported before
 					if (exDocAttributes == null) {
-						scheduleImport(mimeType, docCacheFile, true, docAttributes);
+						scheduleImport(mimeType, docCacheFile, docId, true, docAttributes);
 						docStatus = "Scheduled for import.";
 					}
 					else {
@@ -858,8 +939,8 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 			}
 			public void performActionConsole(String[] arguments) {
 				if (arguments.length == 0)
-					loadImporters(true);
-				else System.out.println(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
+					loadImporters(this);
+				else this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
 			}
 		};
 		cal.add(ca);
@@ -878,8 +959,9 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 			}
 			public void performActionConsole(String[] arguments) {
 				if (arguments.length == 0)
-					System.out.println(importQueue.size() + " document imports pending.");
-				else System.out.println(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
+//					this.reportResult(importQueue.size() + " document imports pending.");
+					this.reportResult(importHandler.getDataActionsPending() + " document imports pending.");
+				else this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
 			}
 		};
 		cal.add(ca);
@@ -913,27 +995,48 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 		
 		if (attributes != null)
 			AttributeUtils.copyAttributes(attributes, idi);
-		this.enqueueImport(idi);
+		
+//		this.enqueueImport(idi);
+		String docId;
+		try {
+			InputStream docUrlIn = new BufferedInputStream(new ByteArrayInputStream(url.toString().getBytes()));
+			DataHashOutputStream docHashOut = new DataHashOutputStream(new OutputStream() {
+				public void write(int b) throws IOException {}
+			});
+			byte[] buffer = new byte[1024];
+			for (int r; (r = docUrlIn.read(buffer, 0, buffer.length)) != -1;)
+				docHashOut.write(buffer, 0, r);
+			docHashOut.flush();
+			docHashOut.close();
+			docUrlIn.close();
+			docId = docHashOut.getDataHash();
+		}
+		catch (IOException ioe) {
+			docId = Gamta.getAnnotationID();
+		}
+		this.importHandler.enqueueDataAction(docId, idi.getArguments());
 	}
 	
 	/**
 	 * Schedule a document import from a file.
 	 * @param mimeType the MIME type of the document
 	 * @param file the file to import from
+	 * @param id the identifier hashed from the file to import
 	 * @param attributes additional document attributes
 	 */
-	public void scheduleImport(String mimeType, File file, Attributed attributes) {
-		this.scheduleImport(mimeType, file, false, attributes);
+	public void scheduleImport(String mimeType, File file, String id, Attributed attributes) {
+		this.scheduleImport(mimeType, file, id, false, attributes);
 	}
 	
 	/**
 	 * Schedule a document import from a file.
 	 * @param mimeType the MIME type of the document
 	 * @param file the file to import from
+	 * @param id the identifier hashed from the file to import
 	 * @param attributes additional document attributes
 	 * @param deleteFile delete the cache file after import?
 	 */
-	public void scheduleImport(String mimeType, File file, boolean deleteFile, Attributed attributes) {
+	public void scheduleImport(String mimeType, File file, String id, boolean deleteFile, Attributed attributes) {
 		ImiDocumentImport idi = new ImiDocumentImport(mimeType, file, deleteFile);
 		
 		String fileName = file.getName();
@@ -949,7 +1052,9 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 		
 		if (attributes != null)
 			AttributeUtils.copyAttributes(attributes, idi);
-		this.enqueueImport(idi);
+		
+//		this.enqueueImport(idi);
+		this.importHandler.enqueueDataAction(id, idi.getArguments());
 	}
 	
 	/**
@@ -962,79 +1067,105 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 	public boolean checkDocumentExists(String docId) {
 		return (this.ims.getDocumentVersionHistory(docId) != null);
 	}
+//	
+//	private LinkedList importQueue = new LinkedList() {
+//		private HashSet deduplicator = new HashSet();
+//		public Object removeFirst() {
+//			Object e = super.removeFirst();
+//			this.deduplicator.remove(e);
+//			return e;
+//		}
+//		public void addLast(Object e) {
+//			if (this.deduplicator.add(e))
+//				super.addLast(e);
+//		}
+//	};
+//	private void enqueueImport(ImiDocumentImport idi) {
+//		synchronized (this.importQueue) {
+//			this.importQueue.addLast(idi);
+//			this.importQueue.notify();
+//		}
+//	}
+//	private ImiDocumentImport getImport() {
+//		synchronized (this.importQueue) {
+//			if (this.importQueue.isEmpty()) try {
+//				this.importQueue.wait();
+//			} catch (InterruptedException ie) {}
+//			return (this.importQueue.isEmpty() ? null : ((ImiDocumentImport) this.importQueue.removeFirst()));
+//		}
+//	}
 	
-	private LinkedList importQueue = new LinkedList() {
-		private HashSet deduplicator = new HashSet();
-		public Object removeFirst() {
-			Object e = super.removeFirst();
-			this.deduplicator.remove(e);
-			return e;
-		}
-		public void addLast(Object e) {
-			if (this.deduplicator.add(e))
-				super.addLast(e);
-		}
-	};
-	private void enqueueImport(ImiDocumentImport idi) {
-		synchronized (this.importQueue) {
-			this.importQueue.addLast(idi);
-			this.importQueue.notify();
-		}
-	}
-	private ImiDocumentImport getImport() {
-		synchronized (this.importQueue) {
-			if (this.importQueue.isEmpty()) try {
-				this.importQueue.wait();
-			} catch (InterruptedException ie) {}
-			return (this.importQueue.isEmpty() ? null : ((ImiDocumentImport) this.importQueue.removeFirst()));
-		}
-	}
-	
-	private class ImporterThread extends Thread {
-		public void run() {
+	void handleImport(ImiDocumentImport idi) {
+		
+		//	find appropriate importer
+		ImiDocumentImporter importer = null;
+		synchronized (this) {
 			
-			//	don't start right away
-			try {
-				sleep(1000 * 15);
+			//	wait for importers to be reloaded
+			while (this.importers == null) try {
+				GoldenGateIMI.this.wait(1000);
 			} catch (InterruptedException ie) {}
 			
-			//	keep going until shutdown
-			while (true) {
-				
-				//	get next import
-				ImiDocumentImport idi = getImport();
-				if (idi == null)
-					return; // only happens on shutdown
-				
-				//	find appropriate importer
-				ImiDocumentImporter importer = null;
-				synchronized (GoldenGateIMI.this) {
-					
-					//	wait for importers to be reloaded
-					while (GoldenGateIMI.this.importers == null) try {
-						GoldenGateIMI.this.wait(1000);
-					} catch (InterruptedException ie) {}
-					
-					//	get importer
-					for (int i = 0; i < importers.length; i++)
-						if (importers[i].canHandleImport(idi)) {
-							importer = importers[i];
-							break;
-						}
+			//	get importer
+			for (int i = 0; i < this.importers.length; i++)
+				if (this.importers[i].canHandleImport(idi)) {
+					importer = this.importers[i];
+					break;
 				}
-				if (importer == null) {
-					System.out.println("Could not find importer for " + idi.dataMimeType + " document from " + idi.toString());
-					continue;
-				}
-				
-				//	handle import
-				importer.handleImport(idi);
-				
-				//	give the others a little time
-				try {
-					sleep(1000 * 5);
-				} catch (InterruptedException ie) {}
-			}
 		}
+		if (importer == null)
+			this.logWarning("Could not find importer for " + idi.dataMimeType + " document from " + idi.toString());
+		
+		//	handle import
+		else importer.handleImport(idi);
 	}
+//	
+//	private class ImporterThread extends Thread {
+//		public void run() {
+//			
+//			//	don't start right away
+//			try {
+//				sleep(1000 * 15);
+//			} catch (InterruptedException ie) {}
+//			
+//			//	keep going until shutdown
+//			while (true) {
+//				
+//				//	get next import
+//				ImiDocumentImport idi = getImport();
+//				if (idi == null)
+//					return; // only happens on shutdown
+////				
+////				//	find appropriate importer
+////				ImiDocumentImporter importer = null;
+////				synchronized (GoldenGateIMI.this) {
+////					
+////					//	wait for importers to be reloaded
+////					while (GoldenGateIMI.this.importers == null) try {
+////						GoldenGateIMI.this.wait(1000);
+////					} catch (InterruptedException ie) {}
+////					
+////					//	get importer
+////					for (int i = 0; i < importers.length; i++)
+////						if (importers[i].canHandleImport(idi)) {
+////							importer = importers[i];
+////							break;
+////						}
+////				}
+////				if (importer == null) {
+////					logWarning("Could not find importer for " + idi.dataMimeType + " document from " + idi.toString());
+////					continue;
+////				}
+//				
+//				//	handle import
+////				importer.handleImport(idi);
+//				else handleImport(idi);
+//				
+//				//	give the others a little time
+//				try {
+//					sleep(1000 * 5);
+//				} catch (InterruptedException ie) {}
+//			}
+//		}
+//	}
 }

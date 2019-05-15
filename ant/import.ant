@@ -5,7 +5,7 @@
 -->
 
 <project name="import">
-	<target name="fetch" depends="fetch-su,fetch-hxu,fetch-gamta,fetch-eio,fetch-iclibs,fetch-im,fetch-gg,fetch-ggs,fetch-ggi" />
+	<target name="fetch" depends="fetch-su,fetch-hxu,fetch-gamta,fetch-eio,fetch-iclibs,fetch-ie,fetch-im,fetch-gg,fetch-ggs,fetch-ggi" />
 	
 	
 	<target name="check-fetch-su" unless="su.exists">
@@ -45,6 +45,15 @@
 		<copy file="../idaho-imagemarkup/dist/ImageMarkupOCR.jar" todir="${lib.home}" overwrite="true" verbose="false" />
 	</target>
 	
+	<target name="check-fetch-ie" unless="ie.exists">
+		<available property="ie.exists" file="../idaho-extensions/dist/GamtaImagingAPI.jar"/>
+	</target>
+	<target name="fetch-ie" depends="check-fetch-ie" if="${ie.exists}">
+    	<copy file="../idaho-extensions/dist/GamtaImagingAPI.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+    	<copy file="../idaho-extensions/dist/GamtaFeedbackAPI.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+	   	<!--copy file="../idaho-extensions/dist/DocumentErrorLogging.jar" todir="${lib.home}" overwrite="true" verbose="false" /-->
+	</target>
+	
 	<target name="check-fetch-gg" unless="gg.exists">
 		<available property="gg.exists" file="../goldengate-editor/dist/GoldenGATE.jar"/>
 	</target>
@@ -57,6 +66,9 @@
 	</target>
 	<target name="fetch-ggs" depends="check-fetch-ggs" if="${ggs.exists}">
     	<copy file="../goldengate-server/dist/GgServer.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+    	<copy file="../goldengate-server/dist/Components/GgServerAEP.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+    	<copy file="../goldengate-server/dist/Components/GgServerRES.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+       	<copy file="../goldengate-server/dist/Components/GgServerUAA.jar" todir="${lib.home}" overwrite="true" verbose="false" />
 	</target>
 	
 	<target name="check-fetch-ggi" unless="ggi.exists">
