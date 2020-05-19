@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -36,7 +36,9 @@ import java.net.URLDecoder;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.Properties;
+import java.util.Set;
 
 import de.uka.ipd.idaho.easyIO.EasyIO;
 import de.uka.ipd.idaho.easyIO.IoProvider;
@@ -44,8 +46,8 @@ import de.uka.ipd.idaho.easyIO.SqlQueryResult;
 import de.uka.ipd.idaho.easyIO.sql.TableDefinition;
 import de.uka.ipd.idaho.gamta.util.DocumentErrorProtocol;
 import de.uka.ipd.idaho.gamta.util.DocumentErrorProtocol.DocumentError;
+import de.uka.ipd.idaho.gamta.util.DocumentErrorSummary;
 import de.uka.ipd.idaho.goldenGateServer.aep.GoldenGateAEP;
-import de.uka.ipd.idaho.goldenGateServer.ime.data.ImeDocumentErrorSummary;
 import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateIMS;
 import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateIMS.DocumentListExtension;
 import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateImsConstants.ImsDocumentEvent;
@@ -74,14 +76,7 @@ public class GoldenGateIME extends GoldenGateAEP implements GoldenGateImeConstan
 	/** Constructor passing 'IME' as the letter code to super constructor
 	 */
 	public GoldenGateIME() {
-		super("IME");
-	}
-	
-	/* (non-Javadoc)
-	 * @see de.uka.ipd.idaho.goldenGateServer.aep.GoldenGateAEP#getEventProcessorName()
-	 */
-	protected String getEventProcessorName() {
-		return "ErrorProtocolExporter";
+		super("IME", "ErrorProtocolExporter");
 	}
 	
 	/* (non-Javadoc)
@@ -101,13 +96,13 @@ public class GoldenGateIME extends GoldenGateAEP implements GoldenGateImeConstan
 		TableDefinition dtd = new TableDefinition(DOCUMENT_ERROR_TABLE_NAME);
 		dtd.addColumn(DOCUMENT_ID_ATTRIBUTE, TableDefinition.VARCHAR_DATATYPE, 32);
 		dtd.addColumn(DOCUMENT_ID_HASH_ATTRIBUTE, TableDefinition.INT_DATATYPE, 0);
-		dtd.addColumn(ERROR_COUNT_ATTRIBUTE, TableDefinition.INT_DATATYPE, 0);
-		dtd.addColumn(ERROR_CATEGORY_COUNT_ATTRIBUTE, TableDefinition.INT_DATATYPE, 0);
-		dtd.addColumn(ERROR_TYPE_COUNT_ATTRIBUTE, TableDefinition.INT_DATATYPE, 0);
-		dtd.addColumn(BLOCKER_ERROR_COUNT_ATTRIBUTE, TableDefinition.INT_DATATYPE, 0);
-		dtd.addColumn(CRITICAL_ERROR_COUNT_ATTRIBUTE, TableDefinition.INT_DATATYPE, 0);
-		dtd.addColumn(MAJOR_ERROR_COUNT_ATTRIBUTE, TableDefinition.INT_DATATYPE, 0);
-		dtd.addColumn(MINOR_ERROR_COUNT_ATTRIBUTE, TableDefinition.INT_DATATYPE, 0);
+		dtd.addColumn(DocumentErrorProtocol.ERROR_COUNT_ATTRIBUTE, TableDefinition.INT_DATATYPE, 0);
+		dtd.addColumn(DocumentErrorProtocol.ERROR_CATEGORY_COUNT_ATTRIBUTE, TableDefinition.INT_DATATYPE, 0);
+		dtd.addColumn(DocumentErrorProtocol.ERROR_TYPE_COUNT_ATTRIBUTE, TableDefinition.INT_DATATYPE, 0);
+		dtd.addColumn(DocumentErrorProtocol.BLOCKER_ERROR_COUNT_ATTRIBUTE, TableDefinition.INT_DATATYPE, 0);
+		dtd.addColumn(DocumentErrorProtocol.CRITICAL_ERROR_COUNT_ATTRIBUTE, TableDefinition.INT_DATATYPE, 0);
+		dtd.addColumn(DocumentErrorProtocol.MAJOR_ERROR_COUNT_ATTRIBUTE, TableDefinition.INT_DATATYPE, 0);
+		dtd.addColumn(DocumentErrorProtocol.MINOR_ERROR_COUNT_ATTRIBUTE, TableDefinition.INT_DATATYPE, 0);
 		if (!this.io.ensureTable(dtd, true))
 			throw new RuntimeException("GoldenGateIMS: Cannot work without database access.");
 		
@@ -156,10 +151,10 @@ Build GoldenGateIME (Image Markup Error Handler):
 			public void documentUpdated(ImsDocumentEvent ide) {
 				if (ide.sourceClassName.equals(GoldenGateIMS.class.getName())) {
 					try {
-						updateDocumentErrors(ide.documentId, ide.documentData);
+						updateDocumentErrors(ide.dataId, ide.documentData);
 					}
 					catch (IOException ioe) {
-						logError("Error updating error data of document '" + ide.documentId + "': " + ioe.getMessage());
+						logError("Error updating error data of document '" + ide.dataId + "': " + ioe.getMessage());
 						logError(ioe);
 					}
 					//	TODOne do this synchronously (it's fast, and more accurate for user)
@@ -169,7 +164,7 @@ Build GoldenGateIME (Image Markup Error Handler):
 				}
 			}
 			public void documentDeleted(ImsDocumentEvent ide) {
-				deleteDocumentErrors(ide.documentId);
+				deleteDocumentErrors(ide.dataId);
 //				//	TODOne do this synchronously (it's fast, and more accurate for user)
 //				dataDeleted(ide.documentId, ide.user);
 			}
@@ -241,7 +236,55 @@ Build GoldenGateIME (Image Markup Error Handler):
 			}
 		};
 		cal.add(ca);
-
+		
+		//	list documents with errors
+		ca = new ComponentActionNetwork() {
+			public String getActionCommand() {
+				return GET_DOCUMENT_LIST_SHARED;
+			}
+			public void performActionNetwork(BufferedReader input, BufferedWriter output) throws IOException {
+				
+				// check authentication
+				String sessionId = input.readLine();
+				if (!uaa.isValidSession(sessionId)) {
+					output.write("Invalid session (" + sessionId + ")");
+					output.newLine();
+					return;
+				}
+				
+				//	read filter string
+				String filterString = input.readLine();
+				Properties filter;
+				if (filterString.length() == 0)
+					filter = null;
+				else {
+					String[] filters = filterString.split("\\&");
+					filter = new Properties();
+					for (int f = 0; f < filters.length; f++) {
+						String[] pair = filters[f].split("\\=");
+						if (pair.length == 2) {
+							String name = pair[0].trim();
+							String value = URLDecoder.decode(pair[1].trim(), ENCODING).trim();
+							
+							String existingValue = filter.getProperty(name);
+							if (existingValue != null)
+								value = existingValue + "\n" + value;
+							
+							filter.setProperty(name, value);
+						}
+					}
+				}
+				
+				//	send document list
+				ImsDocumentList docList = getDocumentList(uaa.getUserNameForSession(sessionId), filter);
+				output.write(GET_DOCUMENT_LIST_SHARED);
+				output.newLine();
+				docList.writeData(output);
+				output.newLine();
+			}
+		};
+		cal.add(ca);
+		
 		//	get error summary
 		ca = new ComponentActionNetwork() {
 			public String getActionCommand() {
@@ -280,14 +323,19 @@ Build GoldenGateIME (Image Markup Error Handler):
 				}
 				
 				//	load error protocol into summary
-				ImeDocumentErrorSummary ides = new ImeDocumentErrorSummary(docId);
-				DocumentErrorProtocol.fillErrorProtocol(ides, null, eps.getInputStream());
+				DocumentErrorSummary des = new DocumentErrorSummary(docId);
+				BufferedReader epBr = new BufferedReader(new InputStreamReader(eps.getInputStream(), "UTF-8"));
+				DocumentErrorProtocol.fillErrorProtocol(des, null, epBr);
+				epBr.close();
 				
 				//	send error summary
 				output.write(GET_ERROR_SUMMARY);
 				output.newLine();
-				ImeDocumentErrorSummary.storeErrorSummary(ides, output);
+				DocumentErrorSummary.storeErrorSummary(des, output);
 				output.flush();
+				
+				//	clean up
+				docData.dispose();
 			}
 		};
 		cal.add(ca);
@@ -326,6 +374,7 @@ Build GoldenGateIME (Image Markup Error Handler):
 				if (eps == null) {
 					output.write("Error protocol unavailable");
 					output.newLine();
+					docData.dispose();
 					return;
 				}
 				
@@ -339,6 +388,10 @@ Build GoldenGateIME (Image Markup Error Handler):
 				for (int r; (r = epBr.read(buffer, 0, buffer.length)) != -1;)
 					output.write(buffer, 0, r);
 				output.flush();
+				epBr.close();
+				
+				//	clean up
+				docData.dispose();
 			}
 		};
 		cal.add(ca);
@@ -351,53 +404,61 @@ Build GoldenGateIME (Image Markup Error Handler):
 	 * @see de.uka.ipd.idaho.goldenGateServer.aep.GoldenGateAEP#doUpdate(java.lang.String, java.lang.String, java.util.Properties, long)
 	 */
 	protected void doUpdate(String dataId, String user, Properties dataAttributes, long params) throws Exception {
-		this.updateDocumentErrors(dataId, this.ims.getDocumentAsData(dataId));
+		ImDocumentData docData = null;
+		try {
+			docData = this.ims.getDocumentAsData(dataId);
+			this.updateDocumentErrors(dataId, docData);
+		}
+		finally {
+			if (docData != null)
+				docData.dispose();
+		}
 	}
 	
-	void updateDocumentErrors(String dodId, ImDocumentData docData) throws IOException {
-		this.logInfo("GoldenGateIME: Getting error protocol for " + dodId);
+	void updateDocumentErrors(String docId, ImDocumentData docData) throws IOException {
+		this.logInfo("GoldenGateIME: Getting error protocol for " + docId);
 		
 		//	get error protocol supplement
 		ImSupplement eps = docData.getSupplement(ImDocumentErrorProtocol.errorProtocolSupplementName);
 		if (eps == null) {
 			this.logInfo(" ==> supplement not found, cleaning up");
-			this.deleteDocumentErrors(dodId);
+			this.deleteDocumentErrors(docId);
 			return;
 		}
 		this.logInfo(" - got supplement");
 		
 		//	load error protocol
-		ImeDocumentErrorSummary ides = new ImeDocumentErrorSummary(dodId);
+		DocumentErrorSummary des = new DocumentErrorSummary(docId);
 		InputStream epin = eps.getInputStream();
-		DocumentErrorProtocol.fillErrorProtocol(ides, null, epin);
+		DocumentErrorProtocol.fillErrorProtocol(des, null, epin);
 		epin.close();
 		this.logInfo(" - protocol summary loaded");
 		
 		//	no error protocol at all, or errors to indicate, we don't need this one any longer
-		if (ides.getErrorCount() == 0) {
+		if (des.getErrorCount() == 0) {
 			this.logInfo(" ==> no errors in protocol, cleaning up");
-			this.deleteDocumentErrors(dodId);
+			this.deleteDocumentErrors(docId);
 			return;
 		}
-		this.logInfo(" - protocol contains " + ides.getErrorCount() + " errors");
+		this.logInfo(" - protocol contains " + des.getErrorCount() + " errors");
 		
 		//	prepare database update
 		StringVector assignments = new StringVector();
 		
 		// get error counts
-		assignments.addElement(ERROR_COUNT_ATTRIBUTE + " = " + ides.getErrorCount());
-		assignments.addElement(ERROR_CATEGORY_COUNT_ATTRIBUTE + " = " + ides.getErrorCategoryCount());
-		assignments.addElement(ERROR_TYPE_COUNT_ATTRIBUTE + " = " + ides.getErrorTypeCount());
-		assignments.addElement(BLOCKER_ERROR_COUNT_ATTRIBUTE + " = " + ides.getErrorSeverityCount(DocumentError.SEVERITY_BLOCKER));
-		assignments.addElement(CRITICAL_ERROR_COUNT_ATTRIBUTE + " = " + ides.getErrorSeverityCount(DocumentError.SEVERITY_CRITICAL));
-		assignments.addElement(MAJOR_ERROR_COUNT_ATTRIBUTE + " = " + ides.getErrorSeverityCount(DocumentError.SEVERITY_MAJOR));
-		assignments.addElement(MINOR_ERROR_COUNT_ATTRIBUTE + " = " + ides.getErrorSeverityCount(DocumentError.SEVERITY_MINOR));
+		assignments.addElement(DocumentErrorProtocol.ERROR_COUNT_ATTRIBUTE + " = " + des.getErrorCount());
+		assignments.addElement(DocumentErrorProtocol.ERROR_CATEGORY_COUNT_ATTRIBUTE + " = " + des.getErrorCategoryCount());
+		assignments.addElement(DocumentErrorProtocol.ERROR_TYPE_COUNT_ATTRIBUTE + " = " + des.getErrorTypeCount());
+		assignments.addElement(DocumentErrorProtocol.BLOCKER_ERROR_COUNT_ATTRIBUTE + " = " + des.getErrorSeverityCount(DocumentError.SEVERITY_BLOCKER));
+		assignments.addElement(DocumentErrorProtocol.CRITICAL_ERROR_COUNT_ATTRIBUTE + " = " + des.getErrorSeverityCount(DocumentError.SEVERITY_CRITICAL));
+		assignments.addElement(DocumentErrorProtocol.MAJOR_ERROR_COUNT_ATTRIBUTE + " = " + des.getErrorSeverityCount(DocumentError.SEVERITY_MAJOR));
+		assignments.addElement(DocumentErrorProtocol.MINOR_ERROR_COUNT_ATTRIBUTE + " = " + des.getErrorSeverityCount(DocumentError.SEVERITY_MINOR));
 		
 		// write new values
 		String updateQuery = ("UPDATE " + DOCUMENT_ERROR_TABLE_NAME + 
 				" SET " + assignments.concatStrings(", ") + 
-				" WHERE " + DOCUMENT_ID_ATTRIBUTE + " LIKE '" + EasyIO.sqlEscape(dodId) + "'" +
-				" AND " + DOCUMENT_ID_HASH_ATTRIBUTE + " = " + dodId.hashCode() + "" +
+				" WHERE " + DOCUMENT_ID_ATTRIBUTE + " LIKE '" + EasyIO.sqlEscape(docId) + "'" +
+				" AND " + DOCUMENT_ID_HASH_ATTRIBUTE + " = " + docId.hashCode() + "" +
 				";");
 		try {
 			
@@ -406,25 +467,25 @@ Build GoldenGateIME (Image Markup Error Handler):
 				
 				// gather complete data for creating master table record
 				StringBuffer fields = new StringBuffer(DOCUMENT_ID_ATTRIBUTE);
-				StringBuffer fieldValues = new StringBuffer("'" + EasyIO.sqlEscape(dodId) + "'");
+				StringBuffer fieldValues = new StringBuffer("'" + EasyIO.sqlEscape(docId) + "'");
 				fields.append(", " + DOCUMENT_ID_HASH_ATTRIBUTE);
-				fieldValues.append(", " + dodId.hashCode());
+				fieldValues.append(", " + docId.hashCode());
 				
 				// set error counts
-				fields.append(", " + ERROR_COUNT_ATTRIBUTE);
-				fieldValues.append(", " + ides.getErrorCount());
-				fields.append(", " + ERROR_CATEGORY_COUNT_ATTRIBUTE);
-				fieldValues.append(", " + ides.getErrorCategoryCount());
-				fields.append(", " + ERROR_TYPE_COUNT_ATTRIBUTE);
-				fieldValues.append(", " + ides.getErrorTypeCount());
-				fields.append(", " + BLOCKER_ERROR_COUNT_ATTRIBUTE);
-				fieldValues.append(", " + ides.getErrorSeverityCount(DocumentError.SEVERITY_BLOCKER));
-				fields.append(", " + CRITICAL_ERROR_COUNT_ATTRIBUTE);
-				fieldValues.append(", " + ides.getErrorSeverityCount(DocumentError.SEVERITY_CRITICAL));
-				fields.append(", " + MAJOR_ERROR_COUNT_ATTRIBUTE);
-				fieldValues.append(", " + ides.getErrorSeverityCount(DocumentError.SEVERITY_MAJOR));
-				fields.append(", " + MINOR_ERROR_COUNT_ATTRIBUTE);
-				fieldValues.append(", " + ides.getErrorSeverityCount(DocumentError.SEVERITY_MINOR));
+				fields.append(", " + DocumentErrorProtocol.ERROR_COUNT_ATTRIBUTE);
+				fieldValues.append(", " + des.getErrorCount());
+				fields.append(", " + DocumentErrorProtocol.ERROR_CATEGORY_COUNT_ATTRIBUTE);
+				fieldValues.append(", " + des.getErrorCategoryCount());
+				fields.append(", " + DocumentErrorProtocol.ERROR_TYPE_COUNT_ATTRIBUTE);
+				fieldValues.append(", " + des.getErrorTypeCount());
+				fields.append(", " + DocumentErrorProtocol.BLOCKER_ERROR_COUNT_ATTRIBUTE);
+				fieldValues.append(", " + des.getErrorSeverityCount(DocumentError.SEVERITY_BLOCKER));
+				fields.append(", " + DocumentErrorProtocol.CRITICAL_ERROR_COUNT_ATTRIBUTE);
+				fieldValues.append(", " + des.getErrorSeverityCount(DocumentError.SEVERITY_CRITICAL));
+				fields.append(", " + DocumentErrorProtocol.MAJOR_ERROR_COUNT_ATTRIBUTE);
+				fieldValues.append(", " + des.getErrorSeverityCount(DocumentError.SEVERITY_MAJOR));
+				fields.append(", " + DocumentErrorProtocol.MINOR_ERROR_COUNT_ATTRIBUTE);
+				fieldValues.append(", " + des.getErrorSeverityCount(DocumentError.SEVERITY_MINOR));
 				
 				// store data in collection main table
 				String insertQuery = "INSERT INTO " + DOCUMENT_ERROR_TABLE_NAME + 
@@ -437,20 +498,18 @@ Build GoldenGateIME (Image Markup Error Handler):
 					this.logInfo(" ==> database entry created");
 				}
 				catch (SQLException sqle) {
-					System.out.println("GoldenGateIME: " + sqle.getClass().getName() + " (" + sqle.getMessage() + ") while storing new document error data.");
-					System.out.println("  query was " + insertQuery);
+					this.logError("GoldenGateIME: " + sqle.getClass().getName() + " (" + sqle.getMessage() + ") while storing new document error data.");
+					this.logError("  query was " + insertQuery);
 					throw new IOException(sqle.getMessage());
 				}
 			}
 			else this.logInfo(" ==> database entry updated");
 		}
 		catch (SQLException sqle) {
-			System.out.println("GoldenGateIME: " + sqle.getClass().getName() + " (" + sqle.getMessage() + ") while updating existing document error data.");
-			System.out.println("  query was " + updateQuery);
+			this.logError("GoldenGateIME: " + sqle.getClass().getName() + " (" + sqle.getMessage() + ") while updating existing document error data.");
+			this.logError("  query was " + updateQuery);
 			throw new IOException(sqle.getMessage());
 		}
-		
-		//	TODO also convert error protocol to XML and update own stats
 	}
 	
 	/* (non-Javadoc)
@@ -473,11 +532,9 @@ Build GoldenGateIME (Image Markup Error Handler):
 			this.logInfo(" ==> database entry deleted");
 		}
 		catch (SQLException sqle) {
-			System.out.println("GoldenGateIME: " + sqle.getClass().getName() + " (" + sqle.getMessage() + ") while deleting document error data.");
-			System.out.println("  query was " + deleteQuery);
+			this.logError("GoldenGateIME: " + sqle.getClass().getName() + " (" + sqle.getMessage() + ") while deleting document error data.");
+			this.logError("  query was " + deleteQuery);
 		}
-		
-		//	TODO also convert error protocol to XML and update own stats
 	}
 	
 	ImsDocumentList getDocumentList(String userName, Properties filter) {
@@ -495,8 +552,8 @@ Build GoldenGateIME (Image Markup Error Handler):
 			return (sqr.next() ? Integer.parseInt(sqr.getString(0)) : 0);
 		}
 		catch (SQLException sqle) {
-			System.out.println("GoldenGateIMS: " + sqle.getClass().getName() + " (" + sqle.getMessage() + ") while getting error document count.");
-			System.out.println("  query was " + query);
+			this.logError("GoldenGateIMS: " + sqle.getClass().getName() + " (" + sqle.getMessage() + ") while getting error document count.");
+			this.logError("  query was " + query);
 			return Integer.MAX_VALUE;
 		}
 		finally {
@@ -507,14 +564,15 @@ Build GoldenGateIME (Image Markup Error Handler):
 	
 	private static class ImeDocumentListExtension extends DocumentListExtension {
 		private static final String[] imeColumnNames = {
-			ERROR_COUNT_ATTRIBUTE,
-			ERROR_CATEGORY_COUNT_ATTRIBUTE,
-			ERROR_TYPE_COUNT_ATTRIBUTE,
-			BLOCKER_ERROR_COUNT_ATTRIBUTE,
-			CRITICAL_ERROR_COUNT_ATTRIBUTE,
-			MAJOR_ERROR_COUNT_ATTRIBUTE,
-			MINOR_ERROR_COUNT_ATTRIBUTE
+			DocumentErrorProtocol.ERROR_COUNT_ATTRIBUTE,
+			DocumentErrorProtocol.ERROR_CATEGORY_COUNT_ATTRIBUTE,
+			DocumentErrorProtocol.ERROR_TYPE_COUNT_ATTRIBUTE,
+			DocumentErrorProtocol.BLOCKER_ERROR_COUNT_ATTRIBUTE,
+			DocumentErrorProtocol.CRITICAL_ERROR_COUNT_ATTRIBUTE,
+			DocumentErrorProtocol.MAJOR_ERROR_COUNT_ATTRIBUTE,
+			DocumentErrorProtocol.MINOR_ERROR_COUNT_ATTRIBUTE
 		};
+		private static final Set imeColumnNameSet = new LinkedHashSet(Arrays.asList(imeColumnNames));
 		private int selectivity;
 		ImeDocumentListExtension(int selectivity) {
 			super(DOCUMENT_ERROR_TABLE_NAME, true, imeColumnNames);
@@ -522,6 +580,15 @@ Build GoldenGateIME (Image Markup Error Handler):
 		}
 		public int getSelectivity() {
 			return this.selectivity;
+		}
+		public boolean hasNoSummary(String columnName) {
+			return imeColumnNameSet.contains(columnName);
+		}
+		public boolean isNumeric(String columnName) {
+			return imeColumnNameSet.contains(columnName);
+		}
+		public boolean isFilterable(String columnName) {
+			return false;
 		}
 	}
 }

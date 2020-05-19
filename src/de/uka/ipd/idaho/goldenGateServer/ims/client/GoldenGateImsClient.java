@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -29,8 +29,6 @@ package de.uka.ipd.idaho.goldenGateServer.ims.client;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
-import java.io.ByteArrayInputStream;
-import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FilterOutputStream;
 import java.io.IOException;
@@ -52,7 +50,6 @@ import java.util.zip.ZipOutputStream;
 import de.uka.ipd.idaho.gamta.util.ControllingProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor.CascadingProgressMonitor;
-import de.uka.ipd.idaho.goldenGateServer.client.ServerConnection;
 import de.uka.ipd.idaho.goldenGateServer.client.ServerConnection.Connection;
 import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateImsConstants;
 import de.uka.ipd.idaho.goldenGateServer.ims.data.ImsDocumentList;
@@ -60,10 +57,8 @@ import de.uka.ipd.idaho.goldenGateServer.uaa.client.AuthenticatedClient;
 import de.uka.ipd.idaho.goldenGateServer.util.BufferedLineInputStream;
 import de.uka.ipd.idaho.goldenGateServer.util.BufferedLineOutputStream;
 import de.uka.ipd.idaho.im.ImDocument;
-import de.uka.ipd.idaho.im.ImSupplement;
 import de.uka.ipd.idaho.im.util.ImDocumentData;
 import de.uka.ipd.idaho.im.util.ImDocumentData.DataBackedImDocument;
-import de.uka.ipd.idaho.im.util.ImDocumentData.FolderImDocumentData;
 import de.uka.ipd.idaho.im.util.ImDocumentData.ImDocumentEntry;
 import de.uka.ipd.idaho.im.util.ImDocumentIO;
 import de.uka.ipd.idaho.stringUtils.StringVector;
@@ -372,6 +367,17 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 			return this.localDocData.canStoreDocument();
 		}
 		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.im.util.ImDocumentData#dispose()
+		 */
+		public void dispose() {
+			super.dispose();
+			this.localDocData.dispose();
+			this.stopBackgroundFetching();
+			this.virtualEntryNames.clear();
+			this.backgroundFetchEntries.clear();
+		}
+		
 		private class BackgroundFetchThread extends Thread {
 			final String docId;
 			BackgroundFetchThread(String docId) {
@@ -538,8 +544,7 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 				public int read(char[] cbuf, int off, int len) throws IOException {
 					return br.read(cbuf, off, len);
 				}
-			});
-		
+			}, pm);
 		else {
 			con.close();
 			throw new IOException(error);
@@ -1607,94 +1612,94 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 				con.close();
 		}
 	}
-	
-	/**
-	 * fast-fetch test
-	 * @param args 
-	 */
-	public static void main(String[] args) throws Exception {
-		ServerConnection sc = ServerConnection.getServerConnection("localhost", 8015);
-		AuthenticatedClient ac = AuthenticatedClient.getAuthenticatedClient(sc);
-		ac.login("Admin", "GG");
-		GoldenGateImsClient ggic = new GoldenGateImsClient(ac, new DocumentDataCache() {
-			private File cacheRootFolder = new File("E:/Testdaten/ImsTest");
-			public ImsClientDocumentData getDocumentData(String docId) throws IOException {
-				File docCacheFolder = new File(this.cacheRootFolder, docId);
-				docCacheFolder.mkdirs();
-				ImDocumentData localDocData;
-				if ((new File(docCacheFolder, "entries.txt")).exists())
-					localDocData = new FolderImDocumentData(docCacheFolder, null);
-				else localDocData = new FolderImDocumentData(docCacheFolder);
-				return new ImsClientDocumentData(docId, localDocData);
-			}
-			public void storeEntryList(ImsClientDocumentData docData) throws IOException {
-				((FolderImDocumentData) docData.getLocalDocData()).storeEntryList();
-			}
-		});
-		
-//		ImDocument doc = ImDocumentIO.loadDocument(new File("E:/Testdaten/PdfExtract/EJT/ejt-502_trietsch_miko_deans.pdf.imdir"));
-//		String[] up = ggic.updateDocument(doc, "TEST", null);
-//		for (int e = 0; e < up.length; e++)
-//			System.out.println(up[e]);
+//	
+//	/**
+//	 * fast-fetch test
+//	 * @param args 
+//	 */
+//	public static void main(String[] args) throws Exception {
+//		ServerConnection sc = ServerConnection.getServerConnection("localhost", 8015);
+//		AuthenticatedClient ac = AuthenticatedClient.getAuthenticatedClient(sc);
+//		ac.login("Admin", "GG");
+//		GoldenGateImsClient ggic = new GoldenGateImsClient(ac, new DocumentDataCache() {
+//			private File cacheRootFolder = new File("E:/Testdaten/ImsTest");
+//			public ImsClientDocumentData getDocumentData(String docId) throws IOException {
+//				File docCacheFolder = new File(this.cacheRootFolder, docId);
+//				docCacheFolder.mkdirs();
+//				ImDocumentData localDocData;
+//				if ((new File(docCacheFolder, "entries.txt")).exists())
+//					localDocData = new FolderImDocumentData(docCacheFolder, null);
+//				else localDocData = new FolderImDocumentData(docCacheFolder);
+//				return new ImsClientDocumentData(docId, localDocData);
+//			}
+//			public void storeEntryList(ImsClientDocumentData docData) throws IOException {
+//				((FolderImDocumentData) docData.getLocalDocData()).storeEntryList();
+//			}
+//		});
 //		
-		ImDocument doc = ggic.getDocument("3F5A2711FFCC9800FFB2FFF8FFA6FFCD", new FastFetchFilter() {
-			public int getFetchMode(ImDocumentEntry entry) {
-				if (entry.name.startsWith(ImSupplement.SOURCE_TYPE + "."))
-					return FETCH_ON_DEMAND;
-				else if (entry.name.startsWith(ImSupplement.FIGURE_TYPE + "@"))
-					return FETCH_ON_DEMAND;
-				else if (entry.name.startsWith(ImSupplement.SCAN_TYPE + "@"))
-					return FETCH_ON_DEMAND;
-				else if (entry.name.startsWith("page") && entry.name.endsWith(".png")) {
-					String pidStr = entry.name;
-					pidStr = pidStr.substring("page".length());
-					pidStr = pidStr.substring(0, (pidStr.length() - ".png".length()));
-					while (pidStr.startsWith("0"))
-						pidStr = pidStr.substring("0".length());
-					try {
-						int pid = Integer.parseInt(pidStr);
-						return ((pid < 5) ? FETCH_IMMEDIATELY : FETCH_DEFERRED);
-					}
-					catch (NumberFormatException nfe) {
-						return FETCH_IMMEDIATELY;
-					}
-					
-				}
-				else return FETCH_IMMEDIATELY;
-			}
-		}, null);
-		
-		InputStream is = doc.getSupplement(ImSupplement.SOURCE_TYPE).getInputStream();
-		int sourceBytes = 0;
-		for (int r; (r = is.read()) != -1;)
-			sourceBytes++;
-		is.close();
-		System.out.println("Got " + sourceBytes + " source bytes");
-		
-		doc.addSupplement(new ImSupplement(doc, "test", "text/plain") {
-			public String getId() {
-				return this.getType();
-			}
-			public InputStream getInputStream() throws IOException {
-				return new ByteArrayInputStream("TEST".getBytes());
-			}
-		});
-		ggic.updateDocument(doc, null);
-		
-//		doc.setAttribute("test", ("test at " + System.currentTimeMillis()));
-//		doc.setAttribute("test", ("" + System.currentTimeMillis()));
+////		ImDocument doc = ImDocumentIO.loadDocument(new File("E:/Testdaten/PdfExtract/EJT/ejt-502_trietsch_miko_deans.pdf.imdir"));
+////		String[] up = ggic.updateDocument(doc, "TEST", null);
+////		for (int e = 0; e < up.length; e++)
+////			System.out.println(up[e]);
+////		
+//		ImDocument doc = ggic.getDocument("3F5A2711FFCC9800FFB2FFF8FFA6FFCD", new FastFetchFilter() {
+//			public int getFetchMode(ImDocumentEntry entry) {
+//				if (entry.name.startsWith(ImSupplement.SOURCE_TYPE + "."))
+//					return FETCH_ON_DEMAND;
+//				else if (entry.name.startsWith(ImSupplement.FIGURE_TYPE + "@"))
+//					return FETCH_ON_DEMAND;
+//				else if (entry.name.startsWith(ImSupplement.SCAN_TYPE + "@"))
+//					return FETCH_ON_DEMAND;
+//				else if (entry.name.startsWith("page") && entry.name.endsWith(".png")) {
+//					String pidStr = entry.name;
+//					pidStr = pidStr.substring("page".length());
+//					pidStr = pidStr.substring(0, (pidStr.length() - ".png".length()));
+//					while (pidStr.startsWith("0"))
+//						pidStr = pidStr.substring("0".length());
+//					try {
+//						int pid = Integer.parseInt(pidStr);
+//						return ((pid < 5) ? FETCH_IMMEDIATELY : FETCH_DEFERRED);
+//					}
+//					catch (NumberFormatException nfe) {
+//						return FETCH_IMMEDIATELY;
+//					}
+//					
+//				}
+//				else return FETCH_IMMEDIATELY;
+//			}
+//		}, null);
 //		
-//		ggic.releaseDocument("FFF1CA60FFCDF655E279E450FFFD2C09");
+//		InputStream is = doc.getSupplement(ImSupplement.SOURCE_TYPE).getInputStream();
+//		int sourceBytes = 0;
+//		for (int r; (r = is.read()) != -1;)
+//			sourceBytes++;
+//		is.close();
+//		System.out.println("Got " + sourceBytes + " source bytes");
 //		
-//		ImDocument doc = ggic.getDocument("FFF1CA60FFCDF655E279E450FFFD2C09", null);
-////		OutputStream docOut = new BufferedOutputStream(new FileOutputStream(new File("E:/Testdaten/PdfExtract/zt00872.pdf.resaved.imf")));
-////		ImfIO.storeDocument(doc, docOut);
-////		docOut.flush();
-////		docOut.close();
-//		doc.getPage(0).removeAttribute("test");
-//		doc.getPage(0).setAttribute("test2");
-//		ggic.uploadDocument(doc, "TEST", null);
-	}
+//		doc.addSupplement(new ImSupplement(doc, "test", "test", "text/plain") {
+////			public String getId() {
+////				return this.getType();
+////			}
+//			public InputStream getInputStream() throws IOException {
+//				return new ByteArrayInputStream("TEST".getBytes());
+//			}
+//		});
+//		ggic.updateDocument(doc, null);
+//		
+////		doc.setAttribute("test", ("test at " + System.currentTimeMillis()));
+////		doc.setAttribute("test", ("" + System.currentTimeMillis()));
+////		
+////		ggic.releaseDocument("FFF1CA60FFCDF655E279E450FFFD2C09");
+////		
+////		ImDocument doc = ggic.getDocument("FFF1CA60FFCDF655E279E450FFFD2C09", null);
+//////		OutputStream docOut = new BufferedOutputStream(new FileOutputStream(new File("E:/Testdaten/PdfExtract/zt00872.pdf.resaved.imf")));
+//////		ImfIO.storeDocument(doc, docOut);
+//////		docOut.flush();
+//////		docOut.close();
+////		doc.getPage(0).removeAttribute("test");
+////		doc.getPage(0).setAttribute("test2");
+////		ggic.uploadDocument(doc, "TEST", null);
+//	}
 //	
 //	/**
 //	 * general test

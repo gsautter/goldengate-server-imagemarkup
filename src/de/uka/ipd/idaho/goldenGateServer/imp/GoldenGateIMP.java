@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -31,12 +31,11 @@ import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -46,6 +45,7 @@ import java.util.Set;
 import de.uka.ipd.idaho.easyIO.sql.TableColumnDefinition;
 import de.uka.ipd.idaho.easyIO.sql.TableDefinition;
 import de.uka.ipd.idaho.gamta.Attributed;
+import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.imaging.DocumentStyle;
 import de.uka.ipd.idaho.goldenGateServer.AbstractGoldenGateServerComponent;
 import de.uka.ipd.idaho.goldenGateServer.GoldenGateServerConstants.GoldenGateServerEvent.EventLogger;
@@ -55,8 +55,10 @@ import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateImsConstants.ImsDocumentE
 import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateImsConstants.ImsDocumentEvent.ImsDocumentEventListener;
 import de.uka.ipd.idaho.goldenGateServer.ims.util.StandaloneDocumentStyleProvider;
 import de.uka.ipd.idaho.goldenGateServer.util.AsynchronousDataActionHandler;
+import de.uka.ipd.idaho.goldenGateServer.util.SlaveInstallerUtils;
 import de.uka.ipd.idaho.im.ImAnnotation;
 import de.uka.ipd.idaho.im.ImDocument;
+import de.uka.ipd.idaho.im.util.ImDocumentData;
 import de.uka.ipd.idaho.im.util.ImDocumentData.FolderImDocumentData;
 import de.uka.ipd.idaho.im.util.ImDocumentData.ImDocumentEntry;
 import de.uka.ipd.idaho.stringUtils.StringVector;
@@ -74,13 +76,30 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 	private GoldenGateIMS ims;
 	
 	private String updateUserName;
-	
-	private String docStyleListUrl;
-	private String docStyleNamePattern;
+	private int maxSlaveMemory = 1024;
+	private int maxSlaveCores = 1;
 	
 	private File workingFolder;
 	private File cacheFolder;
 	private AsynchronousDataActionHandler documentProcessor;
+	
+	//	TODO keep these fields _per_slave_ soon as we start using multiple !!!
+	private Process batchRun = null;
+	private PrintStream batchOut = null;
+	private ComponentActionConsole dumpSlaveStackCac = null;
+	private String processingDocId = null;
+	private long processingStart = -1;
+	private String processorName = null;
+	private long processorStart = -1;
+	private String processingStep = null;
+	private long processingStepStart = -1;
+	private String processingInfo = null;
+	private long processingInfoStart = -1;
+	
+	private String docStyleListUrl;
+	private String docStyleNamePattern;
+	private File docStyleFolder;
+	private DocumentStyle.Provider docStyleProvider;
 	
 	private String ggiConfigHost;
 	private String ggiConfigName;
@@ -99,6 +118,14 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		
 		//	get default import user name
 		this.updateUserName = this.configuration.getSetting("updateUserName", "GgIMP");
+		
+		//	get maximum memory and CPU core limit for slave process
+		try {
+			this.maxSlaveMemory = Integer.parseInt(this.configuration.getSetting("maxSlaveMemory", ("" + this.maxSlaveMemory)));
+		} catch (RuntimeException re) {}
+		try {
+			this.maxSlaveCores = Integer.parseInt(this.configuration.getSetting("maxSlaveCores", ("" + this.maxSlaveCores)));
+		} catch (RuntimeException re) {}
 		
 		//	get working folder
 		String workingFolderName = this.configuration.getSetting("workingFolderName", "Processor");
@@ -123,45 +150,15 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		this.batchImTools = this.batchImTools.replaceAll("\\s+", "+");
 		
 		//	make document style templates available
-		//	TODO load this on first use (won't work before ECS is up and available)
 		this.docStyleListUrl = this.configuration.getSetting("docStyleListUrl");
 		if (this.docStyleListUrl == null)
 			throw new RuntimeException("Cannot work without document style templates, URL missing");
 		this.docStyleNamePattern = this.configuration.getSetting("docStyleNamePattern");
-		File docStyleFolder = new File(this.workingFolder, "DocStyles");
-		docStyleFolder.mkdirs();
-		try {
-			new StandaloneDocumentStyleProvider(this.docStyleListUrl, this.docStyleNamePattern, docStyleFolder);
-		}
-		catch (IOException ioe) {
-			ioe.printStackTrace(System.out);
-			throw new RuntimeException("Cannot work without document style templates, URL invalid or broken");
-		}
-		
-		//	install base JARs
-		this.installJar("StringUtils.jar");
-		this.installJar("HtmlXmlUtil.jar");
-		this.installJar("Gamta.jar");
-		this.installJar("mail.jar");
-		this.installJar("EasyIO.jar");
-		this.installJar("GamtaImagingAPI.jar");
-		this.installJar("GamtaFeedbackAPI.jar");
-		
-		//	install image markup and OCR JARs
-		this.installJar("ImageMarkup.jar");
-		this.installJar("ImageMarkup.bin.jar");
-		this.installJar("ImageMarkupOCR.jar");
-		
-		//	install PDF decoder JARs
-		this.installJar("icepdf-core.jar");
-		this.installJar("ImageMarkupPDF.jar");
-		
-		//	install GG Imagine JARs
-		this.installJar("GoldenGATE.jar");
-		this.installJar("GgImagine.jar");
+		this.docStyleFolder = new File(this.workingFolder, "DocStyles");
+		this.docStyleFolder.mkdirs();
 		
 		//	install GGI slave JAR
-		this.installJar("GgServerImpSlave.jar");
+		SlaveInstallerUtils.installSlaveJar("GgServerImpSlave.jar", this.dataPath, this.workingFolder, true);
 		
 		//	create asynchronous worker
 		TableColumnDefinition[] argCols = {
@@ -192,38 +189,6 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		//	TODO schedule processing for all documents we still hold the lock for (must have been interrupted by shutdown before we could save them back and release them)
 	}
 	
-	private void installJar(String name) {
-		System.out.println("Installing JAR '" + name + "'");
-		File source = new File(this.dataPath, name);
-		if (!source.exists())
-			throw new RuntimeException("Missing JAR: " + name);
-		
-		File target = new File(this.workingFolder, name);
-		if ((target.lastModified() + 1000) > source.lastModified()) {
-			System.out.println(" ==> up to date");
-			return;
-		}
-		
-		try {
-			InputStream sourceIn = new BufferedInputStream(new FileInputStream(source));
-			OutputStream targetOut = new BufferedOutputStream(new FileOutputStream(target));
-			byte[] buffer = new byte[1024];
-			for (int r; (r = sourceIn.read(buffer, 0, buffer.length)) != -1;)
-				targetOut.write(buffer, 0, r);
-			targetOut.flush();
-			targetOut.close();
-			sourceIn.close();
-			System.out.println(" ==> installed");
-		}
-		catch (IOException ioe) {
-			throw new RuntimeException("Could not install JAR '" + name + "': " + ioe.getMessage());
-		}
-		catch (Exception e) {
-			e.printStackTrace(System.out);
-			throw new RuntimeException("Could not install JAR '" + name + "': " + e.getMessage());
-		}
-	}
-	
 	/* (non-Javadoc)
 	 * @see de.uka.ipd.idaho.goldenGateServer.AbstractGoldenGateServerComponent#link()
 	 */
@@ -248,7 +213,7 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 				if (!ide.sourceClassName.equals(GoldenGateIMS.class.getName()))
 					return;
 				Attributed docAttributes = ide.documentData.getDocumentAttributes();
-				logInfo("GoldenGATE IMP: checking whether or not to process document " + docAttributes.getAttribute(ImDocument.DOCUMENT_NAME_ATTRIBUTE, ide.documentId));
+				logInfo("GoldenGATE IMP: checking whether or not to process document " + docAttributes.getAttribute(ImDocument.DOCUMENT_NAME_ATTRIBUTE, ide.dataId));
 				
 				//	let's not loop back on our own updates
 				if (updateUserName.equals(ide.user)) {
@@ -260,14 +225,24 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 				ImAnnotation[] docAnnots = ide.documentData.getAnnotations();
 				if (docAnnots.length != 0) {
 					logInfo(" ==> there are already annotations");
-					imsUpdatedDocIDs.remove(ide.documentId);
+					imsUpdatedDocIDs.remove(ide.dataId);
 					return;
 				}
 				
 				//	load document proper only now
 				ImDocument doc;
 				try {
-					doc = ide.documentData.getDocument();
+					doc = ide.documentData.getDocument(new ProgressMonitor() {
+						public void setStep(String step) {
+							logInfo(step);
+						}
+						public void setInfo(String info) {
+							logDebug(info);
+						}
+						public void setBaseProgress(int baseProgress) {}
+						public void setMaxProgress(int maxProgress) {}
+						public void setProgress(int progress) {}
+					});
 				}
 				catch (IOException ioe) {
 					logError("Could not investigate document: " + ioe.getMessage());
@@ -279,29 +254,26 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 				DocumentStyle docStyle = DocumentStyle.getStyleFor(doc);
 				if (docStyle.isEmpty()) {
 					logInfo(" ==> document style template not found");
-					imsUpdatedDocIDs.remove(ide.documentId);
+					imsUpdatedDocIDs.remove(ide.dataId);
 					return;
 				}
 				
 				//	schedule processing document
-				imsUpdatedDocIDs.add(ide.documentId);
+				imsUpdatedDocIDs.add(ide.dataId);
 				logInfo(" ==> processing scheduled for after release");
 			}
 			public void documentDeleted(ImsDocumentEvent dse) {}
 			public void documentReleased(ImsDocumentEvent dse) {
 				if (!dse.sourceClassName.equals(GoldenGateIMS.class.getName()))
 					return;
-				if (imsUpdatedDocIDs.remove(dse.documentId)) {
-//					scheduleBatchRun(new BatchRunRequest(dse.documentId));
+				if (imsUpdatedDocIDs.remove(dse.dataId)) {
 					String[] args = {"", "F", "F"};
-					documentProcessor.enqueueDataAction(dse.documentId, args);
+					documentProcessor.enqueueDataAction(dse.dataId, args);
 				}
 			}
 		});
 		
 		//	start processing handler thread
-//		Thread batchRunner = new BatchRunnerThread();
-//		batchRunner.start();
 		this.documentProcessor.start();
 	}
 	
@@ -313,14 +285,13 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 	protected void exitComponent() {
 		
 		//	shut down processing handler thread
-//		synchronized (this.batchRunQueue) {
-//			this.batchRunQueue.clear();
-//			this.batchRunQueue.notify();
-//		}
 		this.documentProcessor.shutdown();
 	}
 	
 	private static final String PROCESS_DOCUMENT_COMMAND = "process";
+	private static final String PROCESS_STATUS_COMMAND = "status";
+	private static final String PROCESS_STACK_COMMAND = "stack";
+	private static final String PROCESS_KILL_COMMAND = "kill";
 	private static final String LIST_TOOLS_COMMAND = "tools";
 	private static final String QUEUE_SIZE_COMMAND = "queueSize";
 	
@@ -349,14 +320,6 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 				return explanation;
 			}
 			public void performActionConsole(String[] arguments) {
-//				if (arguments.length == 1)
-//					scheduleBatchRun(new BatchRunRequest(arguments[0]));
-//				else if (arguments.length == 2)
-//					scheduleBatchRun(new BatchRunRequest(arguments[0], arguments[1], false, false));
-//				else if (arguments.length == 3)
-//					scheduleBatchRun(new BatchRunRequest(arguments[0], arguments[1], "-wds".equals(arguments[2]), "-v".equals(arguments[2])));
-//				else if (arguments.length == 4)
-//					scheduleBatchRun(new BatchRunRequest(arguments[0], arguments[1], ("-wds".equals(arguments[2]) || "-wds".equals(arguments[3])), ("-v".equals(arguments[2]) || "-v".equals(arguments[3]))));
 				if (arguments.length == 0)
 					this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify at least the document ID.");
 				else if (arguments.length < 4) {
@@ -378,6 +341,92 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 					documentProcessor.enqueueDataAction(arguments[0], args);
 				}
 				else this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify the document ID, markup tool name, document style waiver, and verbosity as the only arguments.");
+			}
+		};
+		cal.add(ca);
+		
+		//	check processing status of a document
+		ca = new ComponentActionConsole() {
+			public String getActionCommand() {
+				return PROCESS_STATUS_COMMAND;
+			}
+			public String[] getExplanation() {
+				String[] explanation = {
+						PROCESS_STATUS_COMMAND,
+						"Show the status of a document that is processing"
+					};
+				return explanation;
+			}
+			public void performActionConsole(String[] arguments) {
+				if (arguments.length != 0) {
+					this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
+					return;
+				}
+				if (processingStart == -1) {
+					this.reportResult("There is no document processing at the moment");
+					return;
+				}
+				//	TODO list status of all running slaves
+				//	TODO include slave IDs
+				//	TODO list more detailed status of individual slave if ID specified
+				long time = System.currentTimeMillis();
+				this.reportResult("Processing document " + processingDocId + " (started " + (time - processingStart) + "ms ago)");
+				this.reportResult(" - current processor is " + processorName + " (since " + (time - processorStart) + "ms)");
+				this.reportResult(" - current step is " + processingStep + " (since " + (time - processingStepStart) + "ms)");
+				this.reportResult(" - current info is " + processingInfo + " (since " + (time - processingInfoStart) + "ms)");
+			}
+		};
+		cal.add(ca);
+		
+		//	check the stack of a batch processing a document
+		ca = new ComponentActionConsole() {
+			public String getActionCommand() {
+				return PROCESS_STACK_COMMAND;
+			}
+			public String[] getExplanation() {
+				String[] explanation = {
+						PROCESS_STACK_COMMAND,
+						"Show the stack trace of the batch processing a document"
+					};
+				return explanation;
+			}
+			public void performActionConsole(String[] arguments) {
+				if (arguments.length != 0) {
+					this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
+					return;
+				}
+				if (processingStart == -1) {
+					this.reportResult("There is no document processing at the moment");
+					return;
+				}
+				dumpSlaveStackCac = this;
+				batchOut.println("DSS:");
+			}
+		};
+		cal.add(ca);
+		
+		//	kill a batch processing a document
+		ca = new ComponentActionConsole() {
+			public String getActionCommand() {
+				return PROCESS_KILL_COMMAND;
+			}
+			public String[] getExplanation() {
+				String[] explanation = {
+						PROCESS_KILL_COMMAND,
+						"Kill the batch processing a document"
+					};
+				return explanation;
+			}
+			public void performActionConsole(String[] arguments) {
+				if (arguments.length != 0) {
+					this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
+					return;
+				}
+				if (processingStart == -1) {
+					this.reportResult("There is no document processing at the moment");
+					return;
+				}
+				batchRun.destroy();
 			}
 		};
 		cal.add(ca);
@@ -524,214 +573,46 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		//	finally ...
 		return ((String[][]) markupToolProviderList.toArray(new String[markupToolProviderList.size()][]));
 	}
-//	
-//	private static class BatchRunRequest {
-//		final String documentId;
-//		final String imtName;
-//		final boolean waiveStyle;
-//		final boolean verbose;
-//		BatchRunRequest(String documentId) {
-//			this(documentId, null, false, false);
-//		}
-//		BatchRunRequest(String documentId, String imtName, boolean waiveStyle, boolean verbose) {
-//			this.documentId = documentId;
-//			this.imtName = imtName;
-//			this.waiveStyle = waiveStyle;
-//			this.verbose = verbose;
-//		}
-//	}
-//	
-//	private LinkedList batchRunQueue = new LinkedList() {
-//		private HashSet deduplicator = new HashSet();
-//		public Object removeFirst() {
-//			Object e = super.removeFirst();
-//			this.deduplicator.remove(e);
-//			return e;
-//		}
-//		public void addLast(Object e) {
-//			if (this.deduplicator.add(e))
-//				super.addLast(e);
-//		}
-//	};
-//	private void scheduleBatchRun(BatchRunRequest brr) {
-//		synchronized (this.batchRunQueue) {
-//			this.batchRunQueue.addLast(brr);
-//			this.batchRunQueue.notify();
-//		}
-//	}
-//	private BatchRunRequest getBatchRun() {
-//		synchronized (this.batchRunQueue) {
-//			if (this.batchRunQueue.isEmpty()) try {
-//				this.batchRunQueue.wait();
-//			} catch (InterruptedException ie) {}
-//			return (this.batchRunQueue.isEmpty() ? null : ((BatchRunRequest) this.batchRunQueue.removeFirst()));
-//		}
-//	}
-//	
-//	private class BatchRunnerThread extends Thread {
-//		public void run() {
-//			
-//			//	don't start right away
-//			try {
-//				sleep(1000 * 15);
-//			} catch (InterruptedException ie) {}
-//			
-//			//	keep going until shutdown
-//			while (true) {
-//				
-//				//	get next document processing request to process
-//				BatchRunRequest brr = getBatchRun();
-//				if (brr == null)
-//					return; // only happens on shutdown
-//				
-//				//	process document
-//				long brrStart = System.currentTimeMillis();
-//				try {
-//					handleBatchRun(brr);
-//				}
-//				catch (Exception e) {
-//					e.printStackTrace(System.out);
-//				}
-//				
-//				//	give the others a little time
-//				try {
-//					sleep(Math.max((1000 * 5), (System.currentTimeMillis() - brrStart)));
-//				} catch (InterruptedException ie) {}
-//			}
-//		}
-//	}
-//	
-//	private void handleBatchRun(BatchRunRequest brr) throws IOException {
-//		
-//		//	check out document as data
-//		ImsDocumentData docData = this.ims.checkoutDocumentAsData(this.updateUserName, brr.documentId);
-//		
-//		//	create document cache folder
-//		File cacheFolder = new File(this.cacheFolder, ("cache-" + brr.documentId));
-//		cacheFolder.mkdirs();
-//		
-//		//	create document output folder
-//		File docFolder = new File(this.cacheFolder, ("doc-" + brr.documentId));
-//		docFolder.mkdirs();
-//		
-//		//	copy document to cache folder (only non-binary entries)
-//		FolderImDocumentData cDocData = new FolderImDocumentData(docFolder);
-//		ImDocumentEntry[] docEntries = docData.getEntries();
-//		for (int e = 0; e < docEntries.length; e++) {
-//			if (!docEntries[e].name.endsWith(".csv"))
-//				continue;
-//			InputStream docEntryIn = new BufferedInputStream(docData.getInputStream(docEntries[e]));
-//			OutputStream cDocEntryOut = new BufferedOutputStream(cDocData.getOutputStream(docEntries[e]));
-//			byte[] buffer = new byte[1024];
-//			for (int r; (r = docEntryIn.read(buffer, 0, buffer.length)) != -1;)
-//				cDocEntryOut.write(buffer, 0, r);
-//			cDocEntryOut.flush();
-//			cDocEntryOut.close();
-//			docEntryIn.close();
-//		}
-//		cDocData.storeEntryList();
-//		
-//		//	assemble command
-//		StringVector command = new StringVector();
-//		command.addElement("java");
-//		command.addElement("-jar");
-//		command.addElement("-Xmx1024m");
-//		command.addElement("GgServerImpSlave.jar");
-//		
-//		//	add parameters
-//		command.addElement("DATA=" + docFolder.getAbsolutePath()); // document folder
-//		command.addElement("CACHE=" + cacheFolder.getAbsolutePath()); // cache folder
-//		if (this.ggiConfigHost != null)
-//			command.addElement("CONFHOST=" + this.ggiConfigHost); // config host (if any)
-//		command.addElement("CONFNAME=" + this.ggiConfigName); // config name
-//		command.addElement("TOOLS=" + ((brr.imtName == null) ? this.batchImTools : brr.imtName)); // IM tool(s) to run
-//		if (brr.waiveStyle && (brr.imtName != null))
-//			command.addElement("WAIVEDS"); // waive requiring document style only for single IM tool
-//		if (brr.verbose && (brr.imtName != null))
-//			command.addElement("VERBOSE"); // loop through all output (good for debugging)
-//		command.addElement("SINGLECORE"); // run on single CPU core only (we don't want to knock out the whole server, do we?)
-//		
-//		//	start batch processor slave process
-//		Process batchRun = Runtime.getRuntime().exec(command.toStringArray(), new String[0], this.workingFolder);
-//		
-//		//	loop through error messages
-//		final BufferedReader importerError = new BufferedReader(new InputStreamReader(batchRun.getErrorStream()));
-//		new Thread() {
-//			public void run() {
-//				try {
-//					for (String errorLine; (errorLine = importerError.readLine()) != null;)
-//						System.out.println(errorLine);
-//				}
-//				catch (Exception e) {
-//					e.printStackTrace(System.out);
-//				}
-//			}
-//		}.start();
-//		
-//		//	TODO catch request for further document entries on input stream ...
-//		//	TODO ... and move them to cache on demand ...
-//		//	TODO ... sending 'ready' message back through process output stream
-//		//	TODO test command: process 6229FF8AD22B0336DF54FFD7FFD3FF8E
-//		
-//		//	loop through step information only
-//		BufferedReader importerIn = new BufferedReader(new InputStreamReader(batchRun.getInputStream()));
-//		for (String inLine; (inLine = importerIn.readLine()) != null;) {
-//			if (inLine.startsWith("S:"))
-//				System.out.println(inLine.substring("S:".length()));
-//			else if (inLine.startsWith("I:")) {}
-//			else if (inLine.startsWith("P:")) {}
-//			else if (inLine.startsWith("BP:")) {}
-//			else if (inLine.startsWith("MP:")) {}
-//			else System.out.println(inLine);
-//		}
-//		
-//		//	wait for batch process to finish
-//		while (true) try {
-//			batchRun.waitFor();
-//			break;
-//		} catch (InterruptedException ie) {}
-//		
-//		//	copy back modified entries
-//		cDocData = new FolderImDocumentData(docFolder, null);
-//		ImDocumentEntry[] cDocEntries = cDocData.getEntries();
-//		boolean docModified = false;
-//		System.out.println("Document " + brr.documentId + " processed, copying back entries:");
-//		for (int e = 0; e < cDocEntries.length; e++) {
-//			ImDocumentEntry docEntry = docData.getEntry(cDocEntries[e].name);
-//			if ((docEntry != null) && docEntry.dataHash.equals(cDocEntries[e].dataHash)) {
-//				System.out.println(" - " + cDocEntries[e].name + " ==> unmodified");
-//				continue; // this entry exists and didn't change
-//			}
-//			InputStream cDocEntryIn = new BufferedInputStream(cDocData.getInputStream(cDocEntries[e]));
-//			OutputStream docEntryOut = new BufferedOutputStream(docData.getOutputStream(cDocEntries[e]));
-//			byte[] buffer = new byte[1024];
-//			for (int r; (r = cDocEntryIn.read(buffer, 0, buffer.length)) != -1;)
-//				docEntryOut.write(buffer, 0, r);
-//			docEntryOut.flush();
-//			docEntryOut.close();
-//			cDocEntryIn.close();
-//			docModified = true;
-//			System.out.println(" - " + cDocEntries[e].name + " ==> modified");
-//		}
-//		
-//		//	update and release document in IMS
-//		if (docModified)
-//			this.ims.updateDocumentFromData(this.updateUserName, this.updateUserName, docData, new EventLogger() {
-//				public void writeLog(String logEntry) {
-//					System.out.println(logEntry);
-//				}
-//			});
-//		this.ims.releaseDocument(this.updateUserName, brr.documentId);
-//		
-//		//	clean up cache and document data
-//		this.cleanupFile(cacheFolder);
-//		this.cleanupFile(docFolder);
-//	}
 	
 	private void processDocument(String docId, String imtName, boolean waiveStyle, boolean verbose) throws IOException {
 		
-		//	check out document as data
-		ImsDocumentData docData = this.ims.checkoutDocumentAsData(this.updateUserName, docId);
+		//	check out document as data, process it, and clean up
+		ImsDocumentData docData = null;
+		try {
+			this.processingDocId = docId;
+			this.processingStart = System.currentTimeMillis();
+			docData = this.ims.checkoutDocumentAsData(this.updateUserName, docId);
+			this.processDocument(docId, docData, imtName, waiveStyle, verbose);
+		}
+		finally {
+			if (docData != null)
+				docData.dispose();
+			this.dumpSlaveStackCac = null;
+			this.batchRun = null;
+			this.batchOut = null;
+			this.processingDocId = null;
+			this.processingStart = -1;
+			this.processorName = null;
+			this.processorStart = -1;
+			this.processingStep = null;
+			this.processingStepStart = -1;
+			this.processingInfo = null;
+			this.processingInfoStart = -1;
+		}
+	}
+	
+	private void processDocument(String docId, ImsDocumentData docData, String imtName, boolean waiveStyle, boolean verbose) throws IOException {
+		
+		//	create document style provider on demand (now that we're sure ECS is up and available)
+		if (this.docStyleProvider == null) try {
+			this.docStyleProvider = new StandaloneDocumentStyleProvider(this.docStyleListUrl, this.docStyleNamePattern, this.docStyleFolder);
+		}
+		catch (IOException ioe) {
+			this.logError(ioe);
+			this.logError("Cannot work without document style templates, URL invalid or broken");
+			if (!waiveStyle)
+				throw ioe;
+		}
 		
 		//	create document cache folder
 		File cacheFolder = new File(this.cacheFolder, ("cache-" + docId));
@@ -742,27 +623,29 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		docFolder.mkdirs();
 		
 		//	copy document to cache folder (only non-binary entries)
-		FolderImDocumentData cDocData = new FolderImDocumentData(docFolder);
-		ImDocumentEntry[] docEntries = docData.getEntries();
-		for (int e = 0; e < docEntries.length; e++) {
-			if (!docEntries[e].name.endsWith(".csv"))
-				continue;
-			InputStream docEntryIn = new BufferedInputStream(docData.getInputStream(docEntries[e]));
-			OutputStream cDocEntryOut = new BufferedOutputStream(cDocData.getOutputStream(docEntries[e]));
-			byte[] buffer = new byte[1024];
-			for (int r; (r = docEntryIn.read(buffer, 0, buffer.length)) != -1;)
-				cDocEntryOut.write(buffer, 0, r);
-			cDocEntryOut.flush();
-			cDocEntryOut.close();
-			docEntryIn.close();
-		}
-		cDocData.storeEntryList();
+//		FolderImDocumentData outDocData = new FolderImDocumentData(docFolder);
+//		ImDocumentEntry[] outDocEntries = docData.getEntries();
+//		for (int e = 0; e < outDocEntries.length; e++) {
+//			if (!outDocEntries[e].name.endsWith(".csv"))
+//				continue;
+//			InputStream docEntryIn = new BufferedInputStream(docData.getInputStream(outDocEntries[e]));
+//			OutputStream outDocEntryOut = new BufferedOutputStream(outDocData.getOutputStream(outDocEntries[e]));
+//			byte[] buffer = new byte[1024];
+//			for (int r; (r = docEntryIn.read(buffer, 0, buffer.length)) != -1;)
+//				outDocEntryOut.write(buffer, 0, r);
+//			outDocEntryOut.flush();
+//			outDocEntryOut.close();
+//			docEntryIn.close();
+//		}
+//		outDocData.storeEntryList();
+		final CacheImDocumentData cacheDocData = new CacheImDocumentData(docFolder, docData);
 		
 		//	assemble command
 		StringVector command = new StringVector();
 		command.addElement("java");
 		command.addElement("-jar");
-		command.addElement("-Xmx1024m");
+		if (this.maxSlaveMemory > 512)
+			command.addElement("-Xmx" + this.maxSlaveMemory + "m");
 		command.addElement("GgServerImpSlave.jar");
 		
 		//	add parameters
@@ -776,17 +659,30 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 			command.addElement("WAIVEDS"); // waive requiring document style only for single IM tool
 		if (verbose && (imtName != null))
 			command.addElement("VERBOSE"); // loop through all output (good for debugging)
-		command.addElement("SINGLECORE"); // run on single CPU core only (we don't want to knock out the whole server, do we?)
+//		command.addElement("SINGLECORE"); // run on single CPU core only (we don't want to knock out the whole server, do we?)
+		int maxSlaveCores = this.maxSlaveCores;
+		if (maxSlaveCores < 1)
+			maxSlaveCores = 65536;
+		if ((maxSlaveCores * 4) > Runtime.getRuntime().availableProcessors())
+			maxSlaveCores = (Runtime.getRuntime().availableProcessors() / 4);
+		if (maxSlaveCores == 1)
+			command.addElement("SINGLECORE");
+		else command.addElement("MAXCORES=" + maxSlaveCores);
+		//	TODO use JVM argument -XX:ActiveProcessorCount=nn instead or in addition (limits also JVM owned threads)
+		//	==> see https://stackoverflow.com/questions/33723373/can-i-set-the-number-of-threads-cpus-available-to-the-java-vm
 		
 		//	start batch processor slave process
-		Process batchRun = Runtime.getRuntime().exec(command.toStringArray(), new String[0], this.workingFolder);
+		this.batchRun = Runtime.getRuntime().exec(command.toStringArray(), new String[0], this.workingFolder);
+		
+		//	get output channel
+		this.batchOut = new PrintStream(this.batchRun.getOutputStream(), true);
 		
 		//	loop through error messages
-		final BufferedReader importerError = new BufferedReader(new InputStreamReader(batchRun.getErrorStream()));
+		final BufferedReader slaveError = new BufferedReader(new InputStreamReader(this.batchRun.getErrorStream()));
 		new Thread() {
 			public void run() {
 				try {
-					for (String errorLine; (errorLine = importerError.readLine()) != null;)
+					for (String errorLine; (errorLine = slaveError.readLine()) != null;)
 						logError(errorLine);
 				}
 				catch (Exception e) {
@@ -800,45 +696,85 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		//	TODO ... sending 'ready' message back through process output stream
 		//	TODO test command: process 6229FF8AD22B0336DF54FFD7FFD3FF8E
 		
+		//	TODO keep slave process responsive to commands like getting stack trace
+		//	TODO put graphics supplements in cache
+		
 		//	loop through step information only
-		BufferedReader importerIn = new BufferedReader(new InputStreamReader(batchRun.getInputStream()));
-		for (String inLine; (inLine = importerIn.readLine()) != null;) {
-			if (inLine.startsWith("S:"))
-				logInfo(inLine.substring("S:".length()));
-			else if (inLine.startsWith("I:")) {}
+		BufferedReader slaveIn = new BufferedReader(new InputStreamReader(this.batchRun.getInputStream()));
+		for (String inLine; (inLine = slaveIn.readLine()) != null;) {
+			if (inLine.startsWith("S:")) {
+				inLine = inLine.substring("S:".length());
+				logInfo(inLine);
+				processingStep = inLine;
+				processingStepStart = System.currentTimeMillis();
+			}
+			else if (inLine.startsWith("I:")) {
+				inLine = inLine.substring("I:".length());
+				logDebug(inLine);
+				processingInfo = inLine;
+				processingInfoStart = System.currentTimeMillis();
+			}
+			else if (inLine.startsWith("PR:")) {
+				inLine = inLine.substring("PR:".length());
+				logInfo("Running Image Markup Tool '" + inLine + "'");
+				processorName = inLine;
+				processorStart = System.currentTimeMillis();
+			}
 			else if (inLine.startsWith("P:")) {}
 			else if (inLine.startsWith("BP:")) {}
 			else if (inLine.startsWith("MP:")) {}
+			else if (inLine.startsWith("DER:")) {
+				String docEntryName = inLine.substring("DER:".length());
+				ImDocumentEntry docEntry = cacheDocData.getEntry(docEntryName);
+				if (docEntry == null)
+					this.batchOut.println("DEN:" + docEntryName);
+				else try {
+					cacheDocData.cacheDocEntry(docEntry);
+					this.batchOut.println("DEC:" + docEntryName);
+				}
+				catch (IOException ioe) {
+					this.batchOut.println("DEE:" + ioe.getMessage());
+				}
+			}
+			else if (inLine.startsWith("SST:")) {
+				inLine = inLine.substring("SST:".length());
+				ComponentActionConsole cac = this.dumpSlaveStackCac; // play this one absolutely safe
+				if (cac != null)
+					cac.reportResult(inLine);
+			}
+			else if (inLine.equals("SSC:")) {
+				this.dumpSlaveStackCac = null;
+			}
 			else logInfo(inLine);
 		}
 		
 		//	wait for batch process to finish
 		while (true) try {
-			batchRun.waitFor();
+			this.batchRun.waitFor();
 			break;
 		} catch (InterruptedException ie) {}
 		
 		//	copy back modified entries
-		cDocData = new FolderImDocumentData(docFolder, null);
-		ImDocumentEntry[] cDocEntries = cDocData.getEntries();
+		FolderImDocumentData inDocData = new FolderImDocumentData(docFolder, null);
+		ImDocumentEntry[] inDocEntries = inDocData.getEntries();
 		boolean docModified = false;
 		logInfo("Document " + docId + " processed, copying back entries:");
-		for (int e = 0; e < cDocEntries.length; e++) {
-			ImDocumentEntry docEntry = docData.getEntry(cDocEntries[e].name);
-			if ((docEntry != null) && docEntry.dataHash.equals(cDocEntries[e].dataHash)) {
-				logInfo(" - " + cDocEntries[e].name + " ==> unmodified");
+		for (int e = 0; e < inDocEntries.length; e++) {
+			ImDocumentEntry docEntry = docData.getEntry(inDocEntries[e].name);
+			if ((docEntry != null) && docEntry.dataHash.equals(inDocEntries[e].dataHash)) {
+				logInfo(" - " + inDocEntries[e].name + " ==> unmodified");
 				continue; // this entry exists and didn't change
 			}
-			InputStream cDocEntryIn = new BufferedInputStream(cDocData.getInputStream(cDocEntries[e]));
-			OutputStream docEntryOut = new BufferedOutputStream(docData.getOutputStream(cDocEntries[e]));
+			InputStream inDocEntryIn = new BufferedInputStream(inDocData.getInputStream(inDocEntries[e]));
+			OutputStream docEntryOut = new BufferedOutputStream(docData.getOutputStream(inDocEntries[e]));
 			byte[] buffer = new byte[1024];
-			for (int r; (r = cDocEntryIn.read(buffer, 0, buffer.length)) != -1;)
+			for (int r; (r = inDocEntryIn.read(buffer, 0, buffer.length)) != -1;)
 				docEntryOut.write(buffer, 0, r);
 			docEntryOut.flush();
 			docEntryOut.close();
-			cDocEntryIn.close();
+			inDocEntryIn.close();
 			docModified = true;
-			logInfo(" - " + cDocEntries[e].name + " ==> modified");
+			logInfo(" - " + inDocEntries[e].name + " ==> modified");
 		}
 		
 		//	update and release document in IMS
@@ -851,16 +787,289 @@ public class GoldenGateIMP extends AbstractGoldenGateServerComponent {
 		this.ims.releaseDocument(this.updateUserName, docId);
 		
 		//	clean up cache and document data
-		this.cleanupFile(cacheFolder);
-		this.cleanupFile(docFolder);
+		cleanupFile(cacheFolder);
+		cleanupFile(docFolder);
 	}
 	
-	private void cleanupFile(File file) {
+	private static void cleanupFile(File file) {
 		if (file.isDirectory()) {
 			File[] files = file.listFiles();
 			for (int f = 0; f < files.length; f++)
-				this.cleanupFile(files[f]);
+				cleanupFile(files[f]);
 		}
 		file.delete();
 	}
+	
+	private static class CacheImDocumentData extends FolderImDocumentData {
+		ImDocumentData sourceDocData;
+		CacheImDocumentData(File cacheFolder, ImDocumentData sourceDocData) throws IOException {
+			super(cacheFolder);
+			this.sourceDocData = sourceDocData;
+			ImDocumentEntry[] outDocEntries = this.sourceDocData.getEntries();
+			for (int e = 0; e < outDocEntries.length; e++) {
+				if (outDocEntries[e].name.endsWith(".csv"))
+					this.cacheDocEntry(outDocEntries[e]);
+				else this.putEntry(outDocEntries[e]); // add entry as vitual for now
+			}
+			this.storeEntryList();
+		}
+		void cacheDocEntry(ImDocumentEntry docEntry) throws IOException {
+			InputStream docEntryIn = new BufferedInputStream(this.sourceDocData.getInputStream(docEntry));
+			OutputStream outDocEntryOut = new BufferedOutputStream(this.getOutputStream(docEntry));
+			byte[] buffer = new byte[1024];
+			for (int r; (r = docEntryIn.read(buffer, 0, buffer.length)) != -1;)
+				outDocEntryOut.write(buffer, 0, r);
+			outDocEntryOut.flush();
+			outDocEntryOut.close();
+			docEntryIn.close();
+		}
+	}
+//	
+//	private class BatchRun extends Thread {
+//		private ImsDocumentData sourceDocData;
+//		private File docCacheFolder;
+//		
+//		private String imtName;
+//		private boolean waiveStyle;
+//		private boolean verbose;
+//		
+//		private CacheImDocumentData cacheDocData;
+//		private File slaveCacheFolder;
+//		private Process slave;
+//		private PrintStream toSlave;
+//		
+//		private String processingDocId = null;
+//		private long processingStart = -1;
+//		private String processorName = null;
+//		private long processorStart = -1;
+//		private String processingStep = null;
+//		private long processingStepStart = -1;
+//		private String processingInfo = null;
+//		private long processingInfoStart = -1;
+//		private ComponentActionConsole dumpSlaveStackCac;
+//		private ComponentActionConsole killSlaveCac;
+//		
+//		//	TODO figure out how to make sure only limited number running in parallel !!!
+//		
+//		BatchRun(String id, String processingDocId, String imtName, boolean waiveStyle, boolean verbose) {
+//			super(id);
+//			this.processingDocId = processingDocId;
+//			this.imtName = imtName;
+//			this.waiveStyle = waiveStyle;
+//			this.verbose = verbose;
+//		}
+//		
+//		public void run() {
+//			
+//			//	check out document as data, process it, and clean up
+//			try {
+//				//	TODO register with parent
+//				
+//				this.processingDocId = this.sourceDocData.getDocumentId();
+//				this.processingStart = System.currentTimeMillis();
+//				this.sourceDocData = GoldenGateIMP.this.ims.checkoutDocumentAsData(GoldenGateIMP.this.updateUserName, this.processingDocId);
+//				this.processDocument();
+//			}
+//			catch (Exception e) {
+//				logError("Error processing document '" + this.processingDocId + "': " + e.getMessage());
+//				logError(e);
+//				//	TODO maybe hold on to exception and throw in master ???
+//			}
+//			finally {
+//				if (this.sourceDocData != null) {
+//					GoldenGateIMP.this.ims.releaseDocument(GoldenGateIMP.this.updateUserName, this.processingDocId);
+//					this.sourceDocData.dispose();
+//				}
+//				
+//				//	clean up cache and document data
+//				cleanupFile(this.docCacheFolder);
+//				cleanupFile(this.slaveCacheFolder);
+//				
+//				//	TODO unregister from parent
+//			}
+//		}
+//		private void processDocument() throws IOException {
+//			
+//			//	create document cache folder
+//			this.slaveCacheFolder = new File(GoldenGateIMP.this.cacheFolder, ("cache-" + this.processingDocId));
+//			this.slaveCacheFolder.mkdirs();
+//			
+//			//	create document output folder
+//			this.docCacheFolder = new File(GoldenGateIMP.this.cacheFolder, ("doc-" + this.processingDocId));
+//			this.docCacheFolder.mkdirs();
+//			
+//			//	copy document to cache folder (only non-binary entries)
+//			this.cacheDocData = new CacheImDocumentData(this.docCacheFolder, this.sourceDocData);
+//			
+//			//	assemble command
+//			StringVector command = new StringVector();
+//			command.addElement("java");
+//			command.addElement("-jar");
+//			if (GoldenGateIMP.this.maxSlaveMemory > 512)
+//				command.addElement("-Xmx" + GoldenGateIMP.this.maxSlaveMemory + "m");
+//			command.addElement("-Djava.io.tmpdir=" + this.slaveCacheFolder.getAbsolutePath() + "/Temp");
+//			command.addElement("GgServerImpSlave.jar");
+//			
+//			//	add parameters
+//			command.addElement("DATA=" + this.docCacheFolder.getAbsolutePath()); // document folder
+//			command.addElement("CACHE=" + this.slaveCacheFolder.getAbsolutePath()); // cache folder
+//			if (GoldenGateIMP.this.ggiConfigHost != null)
+//				command.addElement("CONFHOST=" + GoldenGateIMP.this.ggiConfigHost); // config host (if any)
+//			command.addElement("CONFNAME=" + GoldenGateIMP.this.ggiConfigName); // config name
+//			command.addElement("TOOLS=" + ((this.imtName == null) ? GoldenGateIMP.this.batchImTools : this.imtName)); // IM tool(s) to run
+//			if (this.waiveStyle && (this.imtName != null))
+//				command.addElement("WAIVEDS"); // waive requiring document style only for single IM tool
+//			if (this.verbose && (this.imtName != null))
+//				command.addElement("VERBOSE"); // loop through all output (good for debugging)
+////			command.addElement("SINGLECORE"); // run on single CPU core only (we don't want to knock out the whole server, do we?)
+//			int maxSlaveCores = GoldenGateIMP.this.maxSlaveCores;
+//			if (maxSlaveCores < 1)
+//				maxSlaveCores = 65536;
+//			if ((maxSlaveCores * 4) > Runtime.getRuntime().availableProcessors())
+//				maxSlaveCores = (Runtime.getRuntime().availableProcessors() / 4);
+//			if (maxSlaveCores == 1)
+//				command.addElement("SINGLECORE");
+//			else command.addElement("MAXCORES=" + maxSlaveCores);
+//			
+//			//	start batch processor slave process
+//			this.slave = Runtime.getRuntime().exec(command.toStringArray(), new String[0], GoldenGateIMP.this.workingFolder);
+//			
+//			//	get output channel
+//			this.toSlave = new PrintStream(this.slave.getOutputStream(), true);
+//			
+//			//	loop through error messages
+//			final BufferedReader slaveError = new BufferedReader(new InputStreamReader(this.slave.getErrorStream()));
+//			new Thread() {
+//				public void run() {
+//					try {
+//						for (String errorLine; (errorLine = slaveError.readLine()) != null;)
+//							logError(errorLine);
+//					}
+//					catch (Exception e) {
+//						logError(e);
+//					}
+//				}
+//			}.start();
+//			
+//			//	loop through step information only
+//			BufferedReader fromSlave = new BufferedReader(new InputStreamReader(this.slave.getInputStream()));
+//			for (String inLine; (inLine = fromSlave.readLine()) != null;) {
+//				if (inLine.startsWith("S:")) {
+//					inLine = inLine.substring("S:".length());
+//					logInfo(inLine);
+//					this.processingStep = inLine;
+//					this.processingStepStart = System.currentTimeMillis();
+//				}
+//				else if (inLine.startsWith("I:")) {
+//					inLine = inLine.substring("I:".length());
+//					logDebug(inLine);
+//					this.processingInfo = inLine;
+//					this.processingInfoStart = System.currentTimeMillis();
+//				}
+//				else if (inLine.startsWith("PR:")) {
+//					inLine = inLine.substring("PR:".length());
+//					logInfo("Running Image Markup Tool '" + inLine + "'");
+//					this.processorName = inLine;
+//					this.processorStart = System.currentTimeMillis();
+//				}
+//				else if (inLine.startsWith("P:")) {}
+//				else if (inLine.startsWith("BP:")) {}
+//				else if (inLine.startsWith("MP:")) {}
+//				else if (inLine.startsWith("DER:")) {
+//					String docEntryName = inLine.substring("DER:".length());
+//					ImDocumentEntry docEntry = this.cacheDocData.getEntry(docEntryName);
+//					if (docEntry == null)
+//						this.toSlave.println("DEN:" + docEntryName);
+//					else try {
+//						this.cacheDocData.cacheDocEntry(docEntry);
+//						this.toSlave.println("DEC:" + docEntryName);
+//					}
+//					catch (IOException ioe) {
+//						this.toSlave.println("DEE:" + docEntryName + "\t" + ioe.getMessage());
+//						logError("Error caching document entry '" + docEntryName + "': " + ioe.getMessage());
+//						logError(ioe);
+//					}
+//				}
+//				else if (inLine.startsWith("SST:")) {
+//					inLine = inLine.substring("SST:".length());
+//					ComponentActionConsole cac = this.dumpSlaveStackCac; // play this one absolutely safe
+//					if (cac != null)
+//						cac.reportResult(inLine);
+//				}
+//				else if (inLine.equals("SSC:")) {
+//					this.dumpSlaveStackCac = null;
+//				}
+//				else logInfo(inLine);
+//			}
+//			
+//			//	wait for batch process to finish
+//			while (true) try {
+//				this.slave.waitFor();
+//				ComponentActionConsole cac = this.killSlaveCac; // play this one absolutely safe
+//				if (cac != null)
+//					cac.reportResult("Slave process terminated successfully");
+//				break;
+//			} catch (InterruptedException ie) {}
+//			
+//			//	clean up
+//			synchronized (this) {
+//				this.slave = null;
+//				this.toSlave = null;
+//			}
+//			
+//			//	copy back modified entries
+//			FolderImDocumentData inDocData = new FolderImDocumentData(this.docCacheFolder, null);
+//			ImDocumentEntry[] inDocEntries = inDocData.getEntries();
+//			boolean docModified = false;
+//			logInfo("Document " + this.processingDocId + " processed, copying back entries:");
+//			for (int e = 0; e < inDocEntries.length; e++) {
+//				if (!inDocData.hasEntryData(inDocEntries[e])) {
+//					logInfo(" - " + inDocEntries[e].name + " ==> never cached");
+//					continue; // skip over virtual entry, no way this was modified
+//				}
+//				ImDocumentEntry sourceDocEntry = this.sourceDocData.getEntry(inDocEntries[e].name);
+//				if ((sourceDocEntry != null) && sourceDocEntry.dataHash.equals(inDocEntries[e].dataHash)) {
+//					logInfo(" - " + inDocEntries[e].name + " ==> unmodified");
+//					continue; // this entry exists and didn't change
+//				}
+//				InputStream inDocEntryIn = new BufferedInputStream(inDocData.getInputStream(inDocEntries[e]));
+//				OutputStream docEntryOut = new BufferedOutputStream(this.sourceDocData.getOutputStream(inDocEntries[e]));
+//				byte[] buffer = new byte[1024];
+//				for (int r; (r = inDocEntryIn.read(buffer, 0, buffer.length)) != -1;)
+//					docEntryOut.write(buffer, 0, r);
+//				docEntryOut.flush();
+//				docEntryOut.close();
+//				inDocEntryIn.close();
+//				docModified = true;
+//				logInfo(" - " + inDocEntries[e].name + " ==> modified");
+//			}
+//			
+//			//	update document in IMS
+//			if (docModified)
+//				GoldenGateIMP.this.ims.updateDocumentFromData(GoldenGateIMP.this.updateUserName, GoldenGateIMP.this.updateUserName, this.sourceDocData, new EventLogger() {
+//					public void writeLog(String logEntry) {
+//						logInfo(logEntry);
+//					}
+//				});
+//		}
+//		synchronized void dumpSlaveStack(ComponentActionConsole cac) {
+//			if (this.toSlave == null)
+//				return;
+//			this.dumpSlaveStackCac = cac;
+//			this.toSlave.println("DSS:");
+//		}
+//		synchronized void kill(ComponentActionConsole cac) {
+//			if (this.slave == null)
+//				return;
+//			this.killSlaveCac = cac;
+//			this.slave.destroy();
+//		}
+//		void reportStatus(ComponentActionConsole cac) {
+//			long time = System.currentTimeMillis();
+//			cac.reportResult("Processing document " + processingDocId + " (started " + (time - processingStart) + "ms ago)");
+//			cac.reportResult(" - current processor is " + processorName + " (since " + (time - processorStart) + "ms)");
+//			cac.reportResult(" - current step is " + processingStep + " (since " + (time - processingStepStart) + "ms)");
+//			cac.reportResult(" - current info is " + processingInfo + " (since " + (time - processingInfoStart) + "ms)");
+//		}
+//	}
 }

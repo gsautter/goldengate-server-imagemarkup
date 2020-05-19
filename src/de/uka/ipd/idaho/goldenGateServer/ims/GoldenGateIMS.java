@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -72,18 +72,21 @@ import de.uka.ipd.idaho.gamta.Attributed;
 import de.uka.ipd.idaho.gamta.Gamta;
 import de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
+import de.uka.ipd.idaho.gamta.util.transfer.DocumentListElement;
 import de.uka.ipd.idaho.goldenGateServer.AbstractGoldenGateServerComponent;
 import de.uka.ipd.idaho.goldenGateServer.GoldenGateServerConstants.GoldenGateServerEvent.EventLogger;
 import de.uka.ipd.idaho.goldenGateServer.GoldenGateServerEventService;
 import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateImsConstants.ImsDocumentEvent.ImsDocumentEventListener;
 import de.uka.ipd.idaho.goldenGateServer.ims.data.ImsDocumentList;
-import de.uka.ipd.idaho.goldenGateServer.ims.data.ImsDocumentListElement;
 import de.uka.ipd.idaho.goldenGateServer.uaa.UserAccessAuthority;
 import de.uka.ipd.idaho.goldenGateServer.util.BufferedLineInputStream;
 import de.uka.ipd.idaho.goldenGateServer.util.BufferedLineOutputStream;
+import de.uka.ipd.idaho.goldenGateServer.util.IdentifierKeyedDataObjectStore;
+import de.uka.ipd.idaho.goldenGateServer.util.IdentifierKeyedDataObjectStore.DataObjectFolder;
 import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.ImSupplement;
 import de.uka.ipd.idaho.im.util.ImDocumentData;
+import de.uka.ipd.idaho.im.util.ImDocumentData.DataBackedImDocument;
 import de.uka.ipd.idaho.im.util.ImDocumentData.FolderImDocumentData;
 import de.uka.ipd.idaho.im.util.ImDocumentData.ImDocumentEntry;
 import de.uka.ipd.idaho.im.util.ImDocumentIO;
@@ -111,14 +114,11 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		String colName;
 		int colLength;
 		boolean isInteger;
-//		String attribName;
 		String[] attribNames;
-//		DocumentAttribute(String colName, int colLength, String attribName) {
 		DocumentAttribute(String colName, int colLength, String[] attribNames) {
 			this.colName = colName;
 			this.colLength = colLength;
 			this.isInteger = (this.colLength < 1);
-//			this.attribName = attribName;
 			this.attribNames = attribNames;
 		}
 		private String getValueFor(Attributed doc) {
@@ -213,11 +213,10 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		return as;
 	}
 	
-	private File documentStorageRoot;
+	private IdentifierKeyedDataObjectStore iks;
+	private boolean showCheckoutUserOnError = false;
 	
 	private IoProvider io;
-//	
-//	private GoldenGateServerEventNotifier eventNotifier;
 	
 	private UserAccessAuthority uaa;
 	
@@ -236,8 +235,11 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		String docFolderName = this.configuration.getSetting("documentFolderName", "Documents");
 		while (docFolderName.startsWith("./"))
 			docFolderName = docFolderName.substring("./".length());
-		this.documentStorageRoot = (((docFolderName.indexOf(":\\") == -1) && (docFolderName.indexOf(":/") == -1) && !docFolderName.startsWith("/")) ? new File(this.dataPath, docFolderName) : new File(docFolderName));
-		this.documentStorageRoot.mkdirs();
+		File documentStorageRoot = (((docFolderName.indexOf(":\\") == -1) && (docFolderName.indexOf(":/") == -1) && !docFolderName.startsWith("/")) ? new File(this.dataPath, docFolderName) : new File(docFolderName));
+		this.iks = new IdentifierKeyedDataObjectStore("ImsDocuments", documentStorageRoot, null, this);
+		
+		//	are we supposed to indicate _who_ checked out a document in an error message?
+		this.showCheckoutUserOnError = "true".equals(this.configuration.getSetting("showCheckoutUserOnError", ("" + this.showCheckoutUserOnError)));
 		
 		//	connect to database
 		this.io = this.host.getIoProvider();
@@ -326,7 +328,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		//	pre-fill caches
 		ImsDocumentList dl = this.getDocumentList(UserAccessAuthority.SUPERUSER_NAME, false, null, null);
 		while (dl.hasNextDocument()) {
-			ImsDocumentListElement dle = dl.getNextDocument();
+			DocumentListElement dle = dl.getNextDocument();
 			this.docIdSet.add(dle.getAttribute(DOCUMENT_ID_ATTRIBUTE));
 			for (int f = 0; f < dl.listFieldNames.length; f++) {
 				if (ImsDocumentList.summarylessAttributes.contains(dl.listFieldNames[f]))
@@ -339,26 +341,24 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		this.uaa.registerPermission(UPLOAD_DOCUMENT_PERMISSION);
 		this.uaa.registerPermission(UPDATE_DOCUMENT_PERMISSION);
 		this.uaa.registerPermission(DELETE_DOCUMENT_PERMISSION);
-//		
-//		//	create event notifier (let events hold their document data, doesn't use as much memory)
-//		this.eventNotifier = new GoldenGateServerEventNotifier("ImsUpdateNotifier");
-//		//	TODO make sure queued events don't hold any documents that might clog memory
 	}
 	
 	/* (non-Javadoc)
 	 * @see de.uka.ipd.idaho.goldenGateServer.AbstractGoldenGateServerComponent#exitComponent()
 	 */
 	protected void exitComponent() {
-//		
-//		//	shut down event notifier
-//		this.eventNotifier.shutdown();
 		
 		//	shut down database connection
 		this.io.close();
+		
+		//	shut down document folder manager
+		this.iks.shutdown();
 	}
 	
 	private static final String SHOW_VERSION_HISTORY_COMMAND = "showVersions";
 	private static final String EXPORT_SOURCE_COMMAND = "exportSource";
+	private static final String ISSUE_EVENT_COMMAND = "issueEvent";
+	private static final String REVERT_DOCUMENT_COMMAND = "revertDoc";
 	
 	/*
 	 * (non-Javadoc)
@@ -399,6 +399,70 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		};
 		cal.add(ca);
 		
+		//	list versions of some document (good for testing that feature, in the first place)
+		ca = new ComponentActionConsole() {
+			public String getActionCommand() {
+				return REVERT_DOCUMENT_COMMAND;
+			}
+			public String[] getExplanation() {
+				String[] explanation = {
+						REVERT_DOCUMENT_COMMAND + " <documentId> <version>",
+						"Revert a document to a previous version:",
+						"- <documentId>: The ID of the document to revert",
+						("- <version>: The number of versions to revert (positive value: absolute version number as from '" + SHOW_VERSION_HISTORY_COMMAND + "', negative number: relative version number)"),
+					};
+				return explanation;
+			}
+			public void performActionConsole(String[] arguments) {
+				if (arguments.length == 2) {
+					ImsDocumentVersionHistory dvh = getDocumentVersionHistory(arguments[0]);
+					if (dvh == null) {
+						this.reportError(" Invalid document ID '" + arguments[0] + "'.");
+						return;
+					}
+					int version;
+					try {
+						version = Integer.parseInt(arguments[1]);
+					}
+					catch (NumberFormatException nfe) {
+						this.reportError("Invalid version number " + arguments[1]);
+						return;
+					}
+					if (version < 0)
+						version = (dvh.getVersion() + version);
+					if (version <= 0) {
+						this.reportError("Invalid version number " + arguments[1] + " for doc document '" + arguments[0] + "', there are only " + dvh.getVersion() + " versions.");
+						this.reportError("Use " + SHOW_VERSION_HISTORY_COMMAND + " to list the existing versions.");
+						return;
+					}
+					ImsDocumentVersion docVersion = dvh.getVersion(version);
+					if (docVersion == null) {
+						this.reportError("Invalid version number " + arguments[1] + " for doc document '" + arguments[0] + "'.");
+						this.reportError("Use " + SHOW_VERSION_HISTORY_COMMAND + " to list the existing versions.");
+						return;
+					}
+					try {
+						ImsDocumentData docData = checkoutDocumentAsData(docVersion.updateUser, arguments[0], docVersion.version);
+						this.reportResult("Document checked out in version " + docVersion.version);
+						updateDocumentFromData(docVersion.updateUser, arguments[0], docData, new EventLogger() {
+							public void writeLog(String logEntry) {
+								reportResult(" ==> " + logEntry);
+							}
+						});
+						this.reportResult("Document updated (reverted) to " + docVersion.version);
+						releaseDocument(docVersion.updateUser, arguments[0]);
+						this.reportResult("Document released");
+					}
+					catch (IOException ioe) {
+						this.reportError("Could not revert document '" + arguments[0] + "': " + ioe.getMessage());
+						this.reportError(ioe);
+					}
+				}
+				else this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify the document ID and the version number.");
+			}
+		};
+		cal.add(ca);
+		
 		//	export source of an Image Markup document stored in this IMS
 		ca = new ComponentActionConsole() {
 			public String getActionCommand() {
@@ -421,49 +485,66 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 				
 				//	check export destination before starting all the other hassle
 				File destFolder = new File(arguments[1]);
-				File destFile = null;
 				if (destFolder.exists() && destFolder.isFile()) {
 					this.reportError(" Invalid destination folder '" + arguments[1] + "', specify a folder, not a file.");
 					return;
 				}
 				destFolder.mkdirs();
 				
-				//	load document data and get original document name
-				ImsDocumentData docData;
-				String docName;
+				//	load document data and perform export from that
+				ImsDocumentData docData = null;
 				try {
 					docData = getDocumentData(arguments[0], false, true);
 					if (docData == null) {
 						this.reportError(" Invalid document ID '" + arguments[0] + "'.");
 						return;
 					}
-					Attributed docAttributes = ImDocumentIO.loadDocumentAttributes(docData);
-					docName = ((String) docAttributes.getAttribute(DOCUMENT_NAME_ATTRIBUTE, ImSupplement.SOURCE_TYPE));
+					this.exportSourceDoc(docData, destFolder);
 				}
 				catch (IOException ioe) {
 					this.reportError(" Error seeking source name of document ID '" + arguments[0] + "': " + ioe.getMessage());
 					this.reportError(ioe);
 					return;
 				}
+				finally {
+					if (docData != null)
+						docData.dispose();
+				}
+			}
+			
+			private void exportSourceDoc(ImsDocumentData docData, File destFolder) {
+				
+				//	get original document name
+				String docName;
+				try {
+					Attributed docAttributes = ImDocumentIO.loadDocumentAttributes(docData);
+					docName = ((String) docAttributes.getAttribute(DOCUMENT_NAME_ATTRIBUTE, ImSupplement.SOURCE_TYPE));
+				}
+				catch (IOException ioe) {
+					this.reportError(" Error seeking source name of document ID '" + docData.docId + "': " + ioe.getMessage());
+					this.reportError(ioe);
+					return;
+				}
 				
 				//	get source input stream and create export destination file
 				InputStream docSourceIn = null;
+				File destFile = null;
 				try {
 					ImDocumentEntry[] docEntries = docData.getEntries();
 					for (int e = 0; e < docEntries.length; e++)
 						if (docEntries[e].name.startsWith(ImSupplement.SOURCE_TYPE)) {
 							docSourceIn = docData.getInputStream(docEntries[e]);
 							String destFileNameSuffix = docEntries[e].name.substring(docEntries[e].name.lastIndexOf('.'));
-							destFile = new File(destFolder, (arguments[0] + "." + docName + (docName.endsWith(destFileNameSuffix) ? "" : destFileNameSuffix)));
+							destFile = new File(destFolder, (docData.docId + "." + docName + (docName.endsWith(destFileNameSuffix) ? "" : destFileNameSuffix)));
 							break;
 						}
 					if (docSourceIn == null) {
-						this.reportError(" Could not find source of document ID '" + arguments[0] + "'.");
+						this.reportError(" Could not find source of document ID '" + docData.docId + "'.");
 						return;
 					}
 				}
 				catch (IOException ioe) {
-					this.reportError(" Error exporting source of document ID '" + arguments[0] + "': " + ioe.getMessage());
+					this.reportError(" Error exporting source of document ID '" + docData.docId + "': " + ioe.getMessage());
 					this.reportError(ioe);
 					return;
 				}
@@ -478,10 +559,10 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 					docSourceOut.close();
 					docSourceIn.close();
 					destFile.setLastModified(Long.parseLong((String) docData.getAttribute(CHECKIN_TIME_ATTRIBUTE)));
-					this.reportResult(" Source of document ID '" + arguments[0] + "' exported to '" + destFile.getAbsolutePath() + "'.");
+					this.reportResult(" Source of document ID '" + docData.docId + "' exported to '" + destFile.getAbsolutePath() + "'.");
 				}
 				catch (IOException ioe) {
-					this.reportError(" Error exporting source of document ID '" + arguments[0] + "' to '" + destFile.getAbsolutePath() + "': " + ioe.getMessage());
+					this.reportError(" Error exporting source of document ID '" + docData.docId + "' to '" + destFile.getAbsolutePath() + "': " + ioe.getMessage());
 					this.reportError(ioe);
 				}
 			}
@@ -542,6 +623,57 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		};
 		cal.add(ca);
 		
+		// list documents
+		ca = new ComponentActionNetwork() {
+			public String getActionCommand() {
+				return GET_DOCUMENT_LIST_SHARED;
+			}
+			public void performActionNetwork(BufferedReader input, BufferedWriter output) throws IOException {
+				
+				// check authentication
+				String sessionId = input.readLine();
+				if (!uaa.isValidSession(sessionId)) {
+					output.write("Invalid session (" + sessionId + ")");
+					output.newLine();
+					logWarning("Request for invalid session - " + sessionId);
+					return;
+				}
+				
+				//	read filter string
+				String filterString = input.readLine();
+				Properties filter;
+				if (filterString.length() == 0)
+					filter = null;
+				else {
+					String[] filters = filterString.split("\\&");
+					filter = new Properties();
+					for (int f = 0; f < filters.length; f++) {
+						String[] pair = filters[f].split("\\=");
+						if (pair.length == 2) {
+							String name = pair[0].trim();
+							String value = URLDecoder.decode(pair[1].trim(), ENCODING).trim();
+							
+							String existingValue = filter.getProperty(name);
+							if (existingValue != null)
+								value = existingValue + "\n" + value;
+							
+							filter.setProperty(name, value);
+						}
+					}
+				}
+				
+				//	TODO use fix registered extensions
+				ImsDocumentList docList = getDocumentList(uaa.getUserNameForSession(sessionId), false, filter, null);
+				
+				output.write(GET_DOCUMENT_LIST_SHARED);
+				output.newLine();
+				
+				docList.writeData(output);
+				output.newLine();
+			}
+		};
+		cal.add(ca);
+		
 		// deliver document update protocol
 		ca = new ComponentActionNetwork() {
 			public String getActionCommand() {
@@ -587,7 +719,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 				int version = Integer.parseInt(input.readLine());
 				
 				//	get document data
-				ImsDocumentData docData = getDocumentData(docId, false, false);
+				ImsDocumentData docData = getDocumentData(docId, false, (version == 0));
 				if (docData == null) {
 					output.write("Invalid document ID (" + docId + ")");
 					output.newLine();
@@ -618,6 +750,9 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 					output.write(ioe.getMessage());
 					output.newLine();
 				}
+				finally {
+					docData.dispose();
+				}
 			}
 		};
 		cal.add(ca);
@@ -640,11 +775,12 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 				
 				//	check permission
 				if (!uaa.hasSessionPermission(sessionId, UPDATE_DOCUMENT_PERMISSION, true)) {
+					//	TODO also allow checkout with only upload permission if checkin user same as checkout user (document owner)
 					output.write("Insufficient permissions for checking out a document");
 					output.newLine();
 					return;
 				}
-
+				
 				// get user
 				String userName = uaa.getUserNameForSession(sessionId);
 				
@@ -653,10 +789,11 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 				int version = Integer.parseInt(input.readLine());
 				
 				//	get entry list, obtain lock, and send entry list
+				ImsDocumentData docData = null;
 				try {
 					
 					//	checkout document
-					ImsDocumentData docData = checkoutDocumentAsData(userName, docId, version);
+					docData = checkoutDocumentAsData(userName, docId, version);
 					
 					//	send back document entry list
 					ImDocumentEntry[] docEntries = docData.getEntries();
@@ -681,6 +818,12 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 				catch (IOException ioe) {
 					releaseDocument(userName, docId);
 					throw ioe;
+				}
+				
+				//	clean up
+				finally {
+					if (docData != null)
+						docData.dispose();
 				}
 			}
 		};
@@ -724,20 +867,25 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 				output.writeLine(GET_DOCUMENT_ENTRIES);
 				
 				//	send requested entries
-				ZipOutputStream zout = new ZipOutputStream(output);
-				byte[] buffer = new byte[1024];
-				for (int e = 0; e < docImfEntries.size(); e++) {
-					ImDocumentEntry entry = ((ImDocumentEntry) docImfEntries.get(e));
-					ZipEntry ze = new ZipEntry(entry.getFileName());
-					ze.setTime(entry.updateTime);
-					zout.putNextEntry(ze);
-					InputStream entryIn = docData.getInputStream(entry);
-					for (int r; (r = entryIn.read(buffer, 0, buffer.length)) != -1;)
-						zout.write(buffer, 0, r);
-					entryIn.close();
-					zout.closeEntry();
+				try {
+					ZipOutputStream zout = new ZipOutputStream(output);
+					byte[] buffer = new byte[1024];
+					for (int e = 0; e < docImfEntries.size(); e++) {
+						ImDocumentEntry entry = ((ImDocumentEntry) docImfEntries.get(e));
+						ZipEntry ze = new ZipEntry(entry.getFileName());
+						ze.setTime(entry.updateTime);
+						zout.putNextEntry(ze);
+						InputStream entryIn = docData.getInputStream(entry);
+						for (int r; (r = entryIn.read(buffer, 0, buffer.length)) != -1;)
+							zout.write(buffer, 0, r);
+						entryIn.close();
+						zout.closeEntry();
+					}
+					zout.flush();
 				}
-				zout.flush();
+				finally {
+					docData.dispose();
+				}
 			}
 		};
 		cal.add(ca);
@@ -813,6 +961,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 				if (updateComplete) {
 					DocumentUpdateProtocol dup = new DocumentUpdateProtocol(du.docData.docId, false);
 					finalizeDocumentUpdate(du, dup);
+					du.docData.dispose();
 					
 					output.write(UPDATE_DOCUMENT_ENTRIES);
 					output.newLine();
@@ -850,6 +999,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 				
 				//	check permission
 				if (!uaa.hasSessionPermission(sessionId, DELETE_DOCUMENT_PERMISSION, true)) {
+					//	TODO also allow deletion with only upload permission if checkin user same as delete user (document owner)
 					output.write("Insufficient permissions for deleting a document");
 					output.newLine();
 					return;
@@ -877,7 +1027,9 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 			}
 		};
 		cal.add(ca);
-
+		
+		//	TODO add ERASE_DOCUMENT for non-recoverable deletion (no implicit owner permission, and no API or at least no UI integration for now)
+		
 		// release checked out document
 		ca = new ComponentActionNetwork() {
 			public String getActionCommand() {
@@ -910,8 +1062,74 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		};
 		cal.add(ca);
 		
+		//	issue update events
+		ca = new ComponentActionConsole() {
+			public String getActionCommand() {
+				return ISSUE_EVENT_COMMAND;
+			}
+			public String[] getExplanation() {
+				String[] explanation = {
+						ISSUE_EVENT_COMMAND + " <docId>",
+						"Issue an update event for a specific document ID:",
+						"- <docId>: the ID of the document to issue an update event for"
+					};
+				return explanation;
+			}
+			public void performActionConsole(String[] arguments) {
+				if (arguments.length == 1)
+					issueEvent(arguments[0], this);
+				else this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify the document ID as the only argument.");
+			}
+		};
+		cal.add(ca);
+		
+		//	get actions from document storage manager
+		ComponentAction[] iksActions = this.iks.getActions();
+		for (int a = 0; a < iksActions.length; a++)
+			cal.add(iksActions[a]);
+		
 		//	finally ...
 		return ((ComponentAction[]) cal.toArray(new ComponentAction[cal.size()]));
+	}
+	
+	private void issueEvent(String docId, ComponentActionConsole cac) {
+		StringBuffer query = new StringBuffer("SELECT " + DOCUMENT_ID_ATTRIBUTE + ", " + UPDATE_USER_ATTRIBUTE + ", " + UPDATE_TIME_ATTRIBUTE);
+		query.append(" FROM " + DOCUMENT_TABLE_NAME);
+		query.append(" WHERE " + DOCUMENT_ID_ATTRIBUTE + " = '" + EasyIO.sqlEscape(docId) + "'");
+		query.append(" AND " + DOCUMENT_ID_HASH_ATTRIBUTE + " = " + docId.hashCode() + "");
+		
+		SqlQueryResult sqr = null;
+		int count = 0;
+		try {
+			sqr = io.executeSelectQuery(query.toString(), true);
+			if (sqr.next()) {
+				String updateUser = sqr.getString(1);
+				long updateTime = sqr.getLong(2);
+				ImsDocumentData docData;
+				try {
+					docData = this.getDocumentAsData(docId);
+					docData.setReadOnly(true);
+				}
+				catch (IOException ioe) {
+					cac.reportError("GoldenGateIMS: error loading data for document '" + docId + "': " + ioe.getMessage());
+					cac.reportError(ioe);
+					return;
+				}
+				GoldenGateServerEventService.notify(new ImsDocumentEvent(updateUser, docId, docData, docData.getDocumentVersion(), GoldenGateIMS.class.getName(), updateTime, new EventLogger() {
+					public void writeLog(String logEntry) {}
+				}));
+				count++;
+			}
+		}
+		catch (SQLException sqle) {
+			cac.reportError("GoldenGateIMS: " + sqle.getClass().getName() + " (" + sqle.getMessage() + ") while issuing document update events.");
+			cac.reportError("  query was " + query);
+		}
+		finally {
+			if (sqr != null)
+				sqr.close();
+		}
+		cac.reportResult("Issued update events for " + count + " documents.");
 	}
 	
 	private void receiveDocument(BufferedReader input, boolean isUpdate, BufferedWriter output) throws IOException {
@@ -927,6 +1145,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		
 		//	check permission
 		if (!this.uaa.hasSessionPermission(sessionId, (isUpdate ? UPDATE_DOCUMENT_PERMISSION : UPLOAD_DOCUMENT_PERMISSION), true)) {
+			//	TODO also allow update with only upload permission if checkin user same as update user (document owner)
 			output.write("Insufficient permissions for " + (isUpdate ? "updating" : "uploading") + " a document");
 			output.newLine();
 			return;
@@ -945,7 +1164,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		if (isUpdate) {
 			
 			//	check document checkout state
-			if (!mayUpdateDocument(sessionUserName, docId)) {
+			if (!this.mayUpdateDocument(sessionUserName, docId)) {
 				output.write("Document checked out by other user, update not possible.");
 				output.newLine();
 				return;
@@ -956,11 +1175,18 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		else {
 			
 			//	get document data, and send error if it already exists
-			ImsDocumentData docData = getDocumentData(docId, false, false);
-			if ((docData != null) && docData.isCompleteVersion()) {
-				output.write("Document " + docId + " already exists, use update instead");
-				output.newLine();
-				return;
+			ImsDocumentData docData = null;
+			try {
+				docData = this.getDocumentData(docId, false, false);
+				if ((docData != null) && docData.isCompleteVersion()) {
+					output.write("Document " + docId + " already exists, use update instead");
+					output.newLine();
+					return;
+				}
+			}
+			finally {
+				if (docData != null)
+					docData.dispose();
 			}
 		}
 		
@@ -975,7 +1201,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		}
 		
 		//	get or create document data
-		ImsDocumentData docData = getDocumentData(docId, true, isUpdate);
+		ImsDocumentData docData = this.getDocumentData(docId, true, isUpdate);
 		
 		//	diff with received entry list
 		ArrayList toUpdateDocEntries = new ArrayList();
@@ -996,6 +1222,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 			//	finalize update right away
 			DocumentUpdateProtocol dup = new DocumentUpdateProtocol(docId, false);
 			finalizeDocumentUpdate(new DocumentUpdate(docData, toUploadImDocumentEntryFileNames, (isUpdate ? sessionUserName : null), userName), dup);
+			docData.dispose();
 			
 			//	send back empty update key to indicate protocol is coming right away
 			output.write(isUpdate ? UPDATE_DOCUMENT : UPLOAD_DOCUMENT);
@@ -1013,7 +1240,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		//	generate update key and cache data
 		String updateKey = Gamta.getAnnotationID();
 		DocumentUpdate update = new DocumentUpdate(docData, toUploadImDocumentEntryFileNames, (isUpdate ? sessionUserName : null), userName);
-		updatesByKey.put(updateKey, update);
+		this.updatesByKey.put(updateKey, update);
 		
 		//	send back entire entry list
 		output.write(isUpdate ? UPDATE_DOCUMENT : UPLOAD_DOCUMENT);
@@ -1038,48 +1265,66 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	 */
 	public static class ImsDocumentData extends FolderImDocumentData implements Attributed {
 		private String docId;
-		private File entryDataFolder;
+		private int docVersion = -1;
+		private DataObjectFolder entryDataFolder;
+		private boolean isActiveClone = true;
 		
-		ImsDocumentData(String docId, File entryDataFolder) throws IOException {
+		ImsDocumentData(String docId, DataObjectFolder entryDataFolder) throws IOException {
 			super(entryDataFolder);
 			this.docId = docId;
 			this.entryDataFolder = entryDataFolder;
+			this.loadEntries(0); // deleted document might have been restored on folder re-creation
 		}
-		ImsDocumentData(String docId, File entryDataFolder, int version) throws IOException {
+		ImsDocumentData(String docId, DataObjectFolder entryDataFolder, int version) throws IOException {
 			super(entryDataFolder);
 			this.docId = docId;
 			this.entryDataFolder = entryDataFolder;
+			if (version != -1)
+				this.loadEntries(version);
+		}
+		
+		private void loadEntries(int version) throws IOException {
 			
-			if (version != -1) {
+			//	check document entry file
+			File docEntryListFile = new File(this.entryDataFolder, ("entries" + ((version == 0) ? "" : ("." + version)) + ".txt"));
+			
+			//	read entry list
+			if (docEntryListFile.exists()) {
+				if (version != 0)
+					this.docVersion = version;
+				BufferedReader entryIn = new BufferedReader(new InputStreamReader(new FileInputStream(docEntryListFile), ENCODING));
 				
-				//	check document entry file
-				File docEntryListFile = new File(this.entryDataFolder, ("entries" + ((version == 0) ? "" : ("." + version)) + ".txt"));
+				//	read provenance attributes from first line
+				String attributeString = entryIn.readLine();
+				ImDocumentIO.setAttributes(this, attributeString);
 				
-				//	read entry list
-				if (docEntryListFile.exists()) {
-					BufferedReader entryIn = new BufferedReader(new InputStreamReader(new FileInputStream(docEntryListFile), ENCODING));
-					
-					//	read provenance attributes from first line
-					String attributeString = entryIn.readLine();
-					ImDocumentIO.setAttributes(this, attributeString);
-					
-					//	read document entry list
-					for (String entryString; (entryString = entryIn.readLine()) != null;) {
-						ImDocumentEntry entry = ImDocumentEntry.fromTabString(entryString);
-						if (entry != null)
-							this.putEntry(entry);
-					}
-					entryIn.close();
+				//	read document entry list
+				for (String entryString; (entryString = entryIn.readLine()) != null;) {
+					ImDocumentEntry entry = ImDocumentEntry.fromTabString(entryString);
+					if (entry != null)
+						this.putEntry(entry);
 				}
-				
-				//	report invalid version number only for explicit version (if no current version exists, something might have gone wrong on document creation)
-				else if (version != 0)
-					throw new IOException("Invalid version number " + version + " for document ID '" + this.docId + "'");
+				entryIn.close();
 			}
+			
+			//	report invalid version number only for explicit version (if no current version exists, something might have gone wrong on document creation)
+			else if (version != 0)
+				throw new IOException("Invalid version number " + version + " for document ID '" + this.docId + "'");
 		}
 		
 		public String getDocumentId() {
 			return this.docId;
+		}
+		
+		/**
+		 * Get the version number of the document as represented by this data
+		 * object.
+		 * @return the document version
+		 */
+		public int getDocumentVersion() {
+			if (this.docVersion == -1)
+				this.docVersion = getCurrentVersion(this.entryDataFolder);
+			return this.docVersion;
 		}
 		
 		private TreeMap attributes = new TreeMap();
@@ -1120,7 +1365,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		int storeEntryList(long time) throws IOException {
 			
 			//	get current version
-			int version = this.getCurrentVersion();
+			int version = getCurrentVersion(this.entryDataFolder);
 			
 			//	open entry file
 			File docEntryListFileUpdating = new File(this.entryDataFolder, "entries.updating.txt");
@@ -1151,66 +1396,23 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 			return (version + 1);
 		}
 		
-		private int getCurrentVersion() {
+		ImsDocumentData cloneForVersion(int version) throws IOException {
 			
-			//	check if folder even exists
-			if (!this.entryDataFolder.exists())
-				return 0;
-			
-			//	get document entry lists
-			File[] docEntryListFiles = this.entryDataFolder.listFiles(new FileFilter() {
-				public boolean accept(File file) {
-					return ((file != null) && file.isFile() && file.getName().startsWith("entries.") && file.getName().endsWith(".txt"));
-				}
-			});
-			
-			//	no entry lists at all, current version is 0
-			if ((docEntryListFiles == null) || (docEntryListFiles.length == 0))
-				return 0;
-			
-			//	only updating entry list, current version is still 0
-			if ((docEntryListFiles.length == 1) && "entries.updating.txt".equals(docEntryListFiles[0].getName()))
-				return 0;
-			
-			//	find most recent version number
-			int version = 0;
-			for (int f = 0; f < docEntryListFiles.length; f++) {
-				String docFileName = docEntryListFiles[f].getName();
-				
-				//	cut file name and dot
-				docFileName = docFileName.substring("entries.".length());
-				
-				//	make sure there's left more than the 'txt' file extension, which will be the case for the most recent version
-				if (docFileName.length() <= "txt".length())
-					continue;
-				
-				//	this one's not live just yet
-				if (docFileName.startsWith("updating."))
-					continue;
-				
-				//	cut file extension and get version number
-				try {
-					version = Math.max(version, Integer.parseInt(docFileName.substring(0, (docFileName.length() - ".txt".length()))));
-				} catch (NumberFormatException nfe) {}
-			}
-			
-			//	extrapolate to most recent version
-			return (version + 1);
-		}
-		
-		ImsDocumentData cloneForVersion(final int version) throws IOException {
+			//	current version requested (we load the entries in that case)
+			if (version == 0)
+				return this;
 			
 			//	compute version if argument relative to current one
-			int absoluteVersion = version;
-			if (absoluteVersion < 0)
-				absoluteVersion = (this.getCurrentVersion() - version);
+			if (version < 0)
+				version = (getCurrentVersion(this.entryDataFolder) - version);
 			
 			//	little we can do about this one
-			if (absoluteVersion < 0)
+			if (version < 0)
 				throw new IOException("Invalid version number " + version + " for document ID '" + this.docId + "'");
 			
 			//	clone for computed version
-			return new ImsDocumentData(this.docId, this.entryDataFolder, absoluteVersion);
+			this.isActiveClone = false;
+			return new ImsDocumentData(this.docId, this.entryDataFolder, version);
 		}
 		
 		ImsDocumentVersionHistory getVersionHistory() throws IOException {
@@ -1335,7 +1537,63 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		public File[] getEntryFiles() {
 			return this.entryDataFolder.listFiles();
 			//	TODO encapsulate files in some way to prevent writing
+			//	TODO ==> maybe overwrite canWrite() method to simply return false
 		}
+		
+		public void dispose() {
+			super.dispose();
+			if (this.docRef != null)
+				this.docRef.clear();
+			if (this.isActiveClone) // make sure to not close data folder if we've been cloned
+				this.entryDataFolder.close();
+		}
+	}
+	
+	private static int getCurrentVersion(DataObjectFolder docFolder) {
+		
+		//	check if folder even exists
+		if (!docFolder.exists())
+			return 0;
+		
+		//	get document entry lists
+		File[] docEntryListFiles = docFolder.listFiles(new FileFilter() {
+			public boolean accept(File file) {
+				return ((file != null) && file.isFile() && file.getName().startsWith("entries.") && file.getName().endsWith(".txt"));
+			}
+		});
+		
+		//	no entry lists at all, current version is 0
+		if ((docEntryListFiles == null) || (docEntryListFiles.length == 0))
+			return 0;
+		
+		//	only updating entry list, current version is still 0
+		if ((docEntryListFiles.length == 1) && "entries.updating.txt".equals(docEntryListFiles[0].getName()))
+			return 0;
+		
+		//	find most recent version number
+		int version = 0;
+		for (int f = 0; f < docEntryListFiles.length; f++) {
+			String docFileName = docEntryListFiles[f].getName();
+			
+			//	cut file name and dot
+			docFileName = docFileName.substring("entries.".length());
+			
+			//	make sure there's left more than the 'txt' file extension, which will be the case for the most recent version
+			if (docFileName.length() <= "txt".length())
+				continue;
+			
+			//	this one's not live just yet
+			if (docFileName.startsWith("updating."))
+				continue;
+			
+			//	cut file extension and get version number
+			try {
+				version = Math.max(version, Integer.parseInt(docFileName.substring(0, (docFileName.length() - ".txt".length()))));
+			} catch (NumberFormatException nfe) {}
+		}
+		
+		//	extrapolate to most recent version
+		return (version + 1);
 	}
 	
 	/**
@@ -1383,6 +1641,15 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		public int getVersion() {
 			Integer lastVersion = ((Integer) this.versions.lastKey());
 			return lastVersion.intValue();
+		}
+		
+		/**
+		 * Retrieve an individual version of the document.
+		 * @param version the version number
+		 * @return the version
+		 */
+		public ImsDocumentVersion getVersion(int version) {
+			return ((ImsDocumentVersion) this.versions.get(new Integer(version)));
 		}
 		
 		/**
@@ -1479,9 +1746,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	}
 	
 	private ImsDocumentData getDocumentData(String docId, boolean create, boolean loadEntries) throws IOException {
-		String primaryFolderName = docId.substring(0, 2);
-		String secondaryFolderName = docId.substring(2, 4);
-		File docFolder = new File(this.documentStorageRoot, (primaryFolderName + "/" + secondaryFolderName + "/" + docId));
+		DataObjectFolder docFolder = this.iks.getDataObjectFolder(docId);
 		if (docFolder.exists())
 			return new ImsDocumentData(docId, docFolder, (loadEntries ? 0 : -1));
 		else if (create) {
@@ -1585,7 +1850,13 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		ImsDocumentData docData = this.storeDocumentData(doc, logger);
 		
 		//	finalize update
-		return this.finalizeDocumentUpdate(new DocumentUpdate(docData, new HashSet(), authUserName, userName), logger);
+		try {
+			return this.finalizeDocumentUpdate(new DocumentUpdate(docData, new HashSet(), authUserName, userName), logger);
+		}
+		finally {
+			if (!(doc instanceof DataBackedImDocument) || (((DataBackedImDocument) doc).getDocumentData() != docData))
+				docData.dispose(); // dispose data only if document not bound to it
+		}
 	}
 	
 	private synchronized ImsDocumentData storeDocumentData(ImDocument doc, final EventLogger logger) throws IOException {
@@ -1593,19 +1864,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		//	get document data
 		ImsDocumentData docData = this.getDocumentData(doc.docId, true, true);
 		
-		//	store document and get entry list
-//		ImDocumentEntry[] docEntries = ImDocumentIO.storeDocument(doc, docData, new ProgressMonitor() {
-//			public void setStep(String step) {
-//				logger.writeLog(step);
-//			}
-//			public void setInfo(String info) {
-//				logger.writeLog(info);
-//			}
-//			public void setBaseProgress(int baseProgress) {}
-//			public void setMaxProgress(int maxProgress) {}
-//			public void setProgress(int progress) {}
-//		});
-//		Arrays.sort(docEntries);
+		//	store document
 		ImDocumentIO.storeDocument(doc, docData, new ProgressMonitor() {
 			public void setStep(String step) {
 				logger.writeLog(step);
@@ -1949,14 +2208,14 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		
 		//	clear cache
 		this.documentMetaDataCache.remove(docId);
-
+		
 		// delete meta data
 		String deleteQuery = "DELETE FROM " + DOCUMENT_TABLE_NAME + 
 				" WHERE " + DOCUMENT_ID_ATTRIBUTE + " LIKE '" + EasyIO.sqlEscape(docId) + "'" +
 				" AND " + DOCUMENT_ID_HASH_ATTRIBUTE + " = " + docId.hashCode() +
 				";";
 		try {
-			ImsDocumentListElement dle = this.getMetaData(docId);
+			DocumentListElement dle = this.getMetaData(docId);
 			this.io.executeUpdateQuery(deleteQuery);
 			this.uncacheDocumentAttributeValues(dle);
 			this.checkoutUserCache.remove(docId);
@@ -1966,7 +2225,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 			this.logError("GoldenGateIMS: " + sqle.getClass().getName() + " (" + sqle.getMessage() + ") while deleting document.");
 			this.logError("  query was " + deleteQuery);
 		}
-
+		
 		// delete document attributes
 		deleteQuery = "DELETE FROM " + DOCUMENT_ATTRIBUTE_TABLE_NAME + 
 				" WHERE " + DOCUMENT_ID_ATTRIBUTE + " LIKE '" + EasyIO.sqlEscape(docId) + "'" +
@@ -1979,6 +2238,9 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 			this.logError("GoldenGateIMS: " + sqle.getClass().getName() + " (" + sqle.getMessage() + ") while deleting document.");
 			this.logError("  query was " + deleteQuery);
 		}
+		
+		//	(reversibly) delete document data
+		this.iks.deleteDataObject(docId);
 		
 		//	indicate success
 		return true;
@@ -2019,7 +2281,6 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	 * @param documentId the ID of the document to load
 	 * @return the document with the specified ID
 	 * @throws IOException
-	 * @see de.uka.ipd.idaho.goldenGateServer.dst.DocumentStore#loadDocument(String)
 	 */
 	public ImDocument getDocument(String documentId) throws IOException {
 		return this.getDocument(documentId, 0);
@@ -2044,7 +2305,17 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 			throw new IOException("Invalid document ID '" + documentId + "'");
 		
 		//	load document
-		return ImDocumentIO.loadDocument(docData, ProgressMonitor.dummy);
+		return ImDocumentIO.loadDocument(docData, new ProgressMonitor() {
+			public void setStep(String step) {
+				logInfo(step);
+			}
+			public void setInfo(String info) {
+				logDebug(info);
+			}
+			public void setBaseProgress(int baseProgress) {}
+			public void setMaxProgress(int maxProgress) {}
+			public void setProgress(int progress) {}
+		});
 	}
 	
 	/**
@@ -2053,7 +2324,6 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	 * @param documentId the ID of the document to load
 	 * @return the document with the specified ID
 	 * @throws IOException
-	 * @see de.uka.ipd.idaho.goldenGateServer.dst.DocumentStore#loadDocument(String)
 	 */
 	public ImsDocumentData getDocumentAsData(String documentId) throws IOException {
 		return this.getDocumentAsData(documentId, 0);
@@ -2073,7 +2343,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	public ImsDocumentData getDocumentAsData(String documentId, int version) throws IOException {
 		
 		//	get document data
-		ImsDocumentData docData = this.getDocumentData(documentId, false, false);
+		ImsDocumentData docData = this.getDocumentData(documentId, false, (version == 0));
 		if (docData == null)
 			throw new IOException("Invalid document ID '" + documentId + "'");
 		
@@ -2121,7 +2391,17 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		
 		//	load document on top of local cache folder
 		try {
-			return ImDocumentIO.loadDocument(docData, ProgressMonitor.dummy);
+			return ImDocumentIO.loadDocument(docData, new ProgressMonitor() {
+				public void setStep(String step) {
+					logInfo(step);
+				}
+				public void setInfo(String info) {
+					logDebug(info);
+				}
+				public void setBaseProgress(int baseProgress) {}
+				public void setMaxProgress(int maxProgress) {}
+				public void setProgress(int progress) {}
+			});
 		}
 		catch (IOException ioe) {
 			this.logError("GoldenGateIMS: " + ioe.getClass().getName() + " (" + ioe.getMessage() + ") while loading document " + documentId + ".");
@@ -2163,7 +2443,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		
 		//	check if checkout possible for user
 		if (!checkoutUser.equals("") && !checkoutUser.equals(userName))
-			throw new DocumentCheckedOutException();
+			throw new DocumentCheckedOutException(this.showCheckoutUserOnError ? checkoutUser : null);
 		
 		//	check out document
 		long checkoutTime = System.currentTimeMillis();
@@ -2184,7 +2464,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 			throw new IOException("Could not acquire checkout lock on document '" + documentId + "'.");
 		
 		//	get document data
-		ImsDocumentData docData = this.getDocumentData(documentId, false, false);
+		ImsDocumentData docData = this.getDocumentData(documentId, false, (version == 0));
 		if (docData == null)
 			throw new IOException("Invalid document ID '" + documentId + "'.");
 		
@@ -2198,8 +2478,8 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	}
 	
 	private static class DocumentCheckedOutException extends IOException {
-		DocumentCheckedOutException() {
-			super("Document checked out by other user, checkout not possible.");
+		DocumentCheckedOutException(String checkoutUser) {
+			super("Document checked out by " + ((checkoutUser == null) ? "other user" : ("user '" + checkoutUser + "'")) + ", checkout not possible.");
 		}
 	}
 	
@@ -2255,13 +2535,9 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	 * Check if a document with a given ID exists.
 	 * @param docId the ID of the document to check
 	 * @return true if the document with the specified ID exists
-	 * @see de.uka.ipd.idaho.goldenGateServer.dst.DocumentStore#isDocumentAvailable(String)
 	 */
 	public boolean isDocumentAvailable(String docId) {
-		String primaryFolderName = docId.substring(0, 2);
-		String secondaryFolderName = docId.substring(2, 4);
-		File docEntryListFile = new File(this.documentStorageRoot, (primaryFolderName + "/" + secondaryFolderName + "/" + docId + "/entries.txt"));
-		return docEntryListFile.exists();
+		return this.iks.isDataObjectAvailable(docId);
 	}
 	
 	/**
@@ -2336,8 +2612,9 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	public Attributed getDocumentAttributes(String documentId) {
 		
 		//	load and return attributes
+		ImsDocumentData docData = null;
 		try {
-			ImsDocumentData docData = this.getDocumentData(documentId, false, true);
+			docData = this.getDocumentData(documentId, false, true);
 			if (docData == null)
 				return null;
 			Attributed docAttributes = ImDocumentIO.loadDocumentAttributes(docData);
@@ -2346,6 +2623,10 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		}
 		catch (IOException ioe) {
 			return null;
+		}
+		finally {
+			if (docData != null)
+				docData.dispose();
 		}
 	}
 	
@@ -2362,14 +2643,19 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	public ImsDocumentVersionHistory getDocumentVersionHistory(String documentId) {
 		
 		//	load and return update users
+		ImsDocumentData docData = null;
 		try {
-			ImsDocumentData docData = this.getDocumentData(documentId, false, true);
+			docData = this.getDocumentData(documentId, false, true);
 			if (docData == null)
 				return null;
 			return docData.getVersionHistory();
 		}
 		catch (IOException ioe) {
 			return null;
+		}
+		finally {
+			if (docData != null)
+				docData.dispose();
 		}
 	}
 	
@@ -2382,10 +2668,10 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	 * @param docId the ID of the document to retrieve the meta data for
 	 * @return the meta data for the document with the specified ID
 	 */
-	public ImsDocumentListElement getMetaData(String docId) {
+	public DocumentListElement getMetaData(String docId) {
 		
 		//	do cache lookup
-		ImsDocumentListElement dle = ((ImsDocumentListElement) this.documentMetaDataCache.get(docId));
+		DocumentListElement dle = ((DocumentListElement) this.documentMetaDataCache.get(docId));
 		if (dle != null)
 			return dle;
 		
@@ -2411,7 +2697,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		try {
 			sqr = this.io.executeSelectQuery(query.toString());
 			if (sqr.next()) {
-				dle = new ImsDocumentListElement();
+				dle = new DocumentListElement();
 				for (int f = 0; f < fieldNames.size(); f++)
 					dle.setAttribute(fieldNames.get(f), sqr.getString(f));
 				this.documentMetaDataCache.put(docId, dle);
@@ -2525,7 +2811,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 				if (fn.indexOf(".") != -1)
 					fieldNames.setElementAt(fn.substring(fn.indexOf(".") + ".".length()), f);
 			}
-			return new SqrDocumentList(fieldNames.toStringArray(), sqr, this.docIdSet.size());
+			return new SqrDocumentList(fieldNames.toStringArray(), sqr, this.docIdSet.size(), null);
 		}
 		catch (SQLException sqle) {
 			this.logError("GoldenGateIMS: " + sqle.getClass().getName() + " (" + sqle.getMessage() + ") while listing documents.");
@@ -2536,7 +2822,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 				public boolean hasNextDocument() {
 					return false;
 				}
-				public ImsDocumentListElement getNextDocument() {
+				public DocumentListElement getNextDocument() {
 					return null;
 				}
 			};
@@ -2546,7 +2832,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	/**
 	 * An extension to the document list, specifying a table to join in, which
 	 * way to join it (inner or left join), which attributes to load from the
-	 * additional table. Joins will always be equi joins on the document ID and
+	 * additional table. Joins will always be equi-joins on the document ID and
 	 * ID hash columns, which the extension table is mandated to provide.
 	 * 
 	 * @author sautter
@@ -2575,6 +2861,36 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		 * @return the (estimated) number of result rows 
 		 */
 		public abstract int getSelectivity();
+		
+		/**
+		 * Indicate whether or not to create a summary of the values of a given
+		 * field in the document list. This method is checked disjunctively
+		 * across all extensions, so implementations should make sure to return
+		 * true only for the fields they add themselves.
+		 * @param columnName the name of the list fields
+		 * @return true if values of the argument list fields should not be summarized
+		 */
+		public abstract boolean hasNoSummary(String columnName);
+		
+		/**
+		 * Indicate whether or not the values of a given list fields are numeric.
+		 * This method is checked disjunctively across all extensions, so
+		 * implementations should make sure to return true only for the fields
+		 * they add themselves.
+		 * @param columnName the name of the list fields
+		 * @return true if values of the argument list fields are numeric
+		 */
+		public abstract boolean isNumeric(String columnName);
+		
+		/**
+		 * Indicate whether or not a given list fields can be used to filter in
+		 * a downstream request. This method is checked disjunctively across
+		 * all extensions, so implementations should make sure to return true
+		 * only for the fields they add themselves.
+		 * @param columnName the name of the list fields
+		 * @return true if the argument list fields is suitable for filtering
+		 */
+		public abstract boolean isFilterable(String columnName);
 	}
 	
 	/**
@@ -2774,6 +3090,38 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		//	get user status
 		boolean isAdmin = this.uaa.isAdmin(userName);
 		
+		//	reduce filter
+		if (filter != null) {
+			Properties rFilter = new Properties();
+			for (Iterator fit = filter.keySet().iterator(); fit.hasNext();) {
+				String filterName = ((String) fit.next());
+				if (!ImsDocumentList.filterableDataFields.contains(filterName) && !this.documentAttributesByName.containsKey(filterName))
+					continue;
+				String filterValue = filter.getProperty(filterName, "").trim();
+				if (filterValue.length() == 0)
+					continue;
+				String[] filterValues = filterValue.split("[\\r\\n]++");
+				if (filterValues.length == 0)
+					continue;
+				if (filterValues.length == 1) {
+					if (this.documentAttributesByName.containsKey(filterName) ? ((DocumentAttribute) this.documentAttributesByName.get(filterName)).isInteger : ImsDocumentList.numericDataAttributes.contains(filterName)) {
+						//	this should prevent SQL injection, as numeric fields are the only ones whose value is not auto-escaped
+						if (filterValues[0].matches("[0-9]++")) {
+							rFilter.setProperty(filterName, filterValue);
+							String customOperator = filter.getProperty((filterName + "Operator"));
+							if ((customOperator != null) && ImsDocumentList.numericOperators.contains(customOperator))
+								rFilter.setProperty((filterName + "Operator"), customOperator);
+							else rFilter.setProperty((filterName + "Operator"), ">");
+						}
+					}
+					else rFilter.setProperty(filterName, filterValue);
+				}
+				else if (filterValues.length > 1)
+					rFilter.setProperty(filterName, filterValue);
+			}
+			filter = (rFilter.isEmpty() ? null : rFilter);
+		}
+		
 		// estimate list size
 		final int selectivity = this.getSelectivity(filter, extensions);
 		
@@ -2841,15 +3189,43 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 				if (fn.indexOf(".") != -1)
 					fieldNames.setElementAt(fn.substring(fn.indexOf(".") + ".".length()), f);
 			}
+			final DocumentListExtension[] fExtensions = extensions;
 			ImsDocumentList dl = new ImsDocumentList(fieldNames.toStringArray()) {
 				public boolean hasNextDocument() {
 					return false;
 				}
-				public ImsDocumentListElement getNextDocument() {
+				public DocumentListElement getNextDocument() {
 					return null;
 				}
 				public AttributeSummary getListFieldValues(String listFieldName) {
 					return GoldenGateIMS.this.getListFieldSummary(listFieldName, true);
+				}
+				public boolean hasNoSummary(String listFieldName) {
+					if (super.hasNoSummary(listFieldName))
+						return true;
+					for (int e = 0; e < fExtensions.length; e++) {
+						if (fExtensions[e].hasNoSummary(listFieldName))
+							return true;
+					}
+					return false;
+				}
+				public boolean isNumeric(String listFieldName) {
+					if (super.isNumeric(listFieldName))
+						return true;
+					for (int e = 0; e < fExtensions.length; e++) {
+						if (fExtensions[e].isNumeric(listFieldName))
+							return true;
+					}
+					return false;
+				}
+				public boolean isFilterable(String listFieldName) {
+					if (super.isFilterable(listFieldName))
+						return true;
+					for (int e = 0; e < fExtensions.length; e++) {
+						if (fExtensions[e].isFilterable(listFieldName))
+							return true;
+					}
+					return false;
 				}
 			};
 			return dl;
@@ -2861,7 +3237,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 //				" WHERE dd." + DOCUMENT_ID_ATTRIBUTE + " = da." + DOCUMENT_ID_ATTRIBUTE + 
 //				" AND dd." + DOCUMENT_ID_HASH_ATTRIBUTE + " = da." + DOCUMENT_ID_HASH_ATTRIBUTE + 
 //				" AND " + this.getDocumentFilter(filter) +
-//				// filter out documents checked out by another user (if not admin)
+//				// filter out documents checked out by other user (if not admin)
 //				(isAdmin ? "" : (" AND ((" + CHECKOUT_TIME_ATTRIBUTE + " = -1) OR (" + CHECKOUT_USER_ATTRIBUTE + " LIKE '" + EasyIO.prepareForLIKE(userName) + "'))")) +
 //				" ORDER BY " + DOCUMENT_NAME_ATTRIBUTE + 
 //				";";
@@ -2869,7 +3245,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 				" FROM " + tableNames.toString() +
 				" WHERE " + joinWhere.toString() + 
 				" AND " + this.getDocumentFilter(filter) +
-				// filter out documents checked out by another user (if not admin)
+				// filter out documents checked out by other user (if not admin)
 				(isAdmin ? "" : (" AND ((" + CHECKOUT_TIME_ATTRIBUTE + " = -1) OR (" + CHECKOUT_USER_ATTRIBUTE + " LIKE '" + EasyIO.prepareForLIKE(userName) + "'))")) +
 				" ORDER BY " + DOCUMENT_NAME_ATTRIBUTE + 
 				";";
@@ -2882,7 +3258,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 				if (fn.indexOf(".") != -1)
 					fieldNames.setElementAt(fn.substring(fn.indexOf(".") + ".".length()), f);
 			}
-			return new SqrDocumentList(fieldNames.toStringArray(), sqr, selectivity);
+			return new SqrDocumentList(fieldNames.toStringArray(), sqr, selectivity, extensions);
 		}
 		catch (SQLException sqle) {
 			this.logError("GoldenGateIMS: " + sqle.getClass().getName() + " (" + sqle.getMessage() + ") while listing documents.");
@@ -2893,7 +3269,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 				public boolean hasNextDocument() {
 					return false;
 				}
-				public ImsDocumentListElement getNextDocument() {
+				public DocumentListElement getNextDocument() {
 					return null;
 				}
 			};
@@ -2903,11 +3279,13 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	private static class SqrDocumentList extends ImsDocumentList {
 		private SqlQueryResult sqr;
 		private int docCount;
-		private ImsDocumentListElement next = null;
-		SqrDocumentList(String[] listFieldNames, SqlQueryResult sqr, int docCount) {
+		private DocumentListElement next = null;
+		private DocumentListExtension[] extensions;
+		SqrDocumentList(String[] listFieldNames, SqlQueryResult sqr, int docCount, DocumentListExtension[] extensions) {
 			super(listFieldNames);
 			this.sqr = sqr;
 			this.docCount = docCount;
+			this.extensions = extensions;
 		}
 		public int getDocumentCount() {
 			return this.docCount;
@@ -2916,7 +3294,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 			if (this.next != null) return true;
 			else if (this.sqr == null) return false;
 			else if (this.sqr.next()) {
-				this.next = new ImsDocumentListElement();
+				this.next = new DocumentListElement();
 				for (int f = 0; f < this.listFieldNames.length; f++)
 					this.next.setAttribute(this.listFieldNames[f], this.sqr.getString(f));
 				this.addListFieldValues(this.next);
@@ -2928,11 +3306,44 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 				return false;
 			}
 		}
-		public ImsDocumentListElement getNextDocument() {
+		public DocumentListElement getNextDocument() {
 			if (!this.hasNextDocument()) return null;
-			ImsDocumentListElement next = this.next;
+			DocumentListElement next = this.next;
 			this.next = null;
 			return next;
+		}
+		public boolean hasNoSummary(String listFieldName) {
+			if (super.hasNoSummary(listFieldName))
+				return true;
+			if (this.extensions == null)
+				return false;
+			for (int e = 0; e < this.extensions.length; e++) {
+				if (this.extensions[e].hasNoSummary(listFieldName))
+					return true;
+			}
+			return false;
+		}
+		public boolean isNumeric(String listFieldName) {
+			if (super.isNumeric(listFieldName))
+				return true;
+			if (this.extensions == null)
+				return false;
+			for (int e = 0; e < this.extensions.length; e++) {
+				if (this.extensions[e].isNumeric(listFieldName))
+					return true;
+			}
+			return false;
+		}
+		public boolean isFilterable(String listFieldName) {
+			if (super.isFilterable(listFieldName))
+				return true;
+			if (this.extensions == null)
+				return false;
+			for (int e = 0; e < this.extensions.length; e++) {
+				if (this.extensions[e].isFilterable(listFieldName))
+					return true;
+			}
+			return false;
 		}
 	}
 	
@@ -2947,6 +3358,13 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		
 		if ((filter == null) || filter.isEmpty())
 			return this.docIdSet.size();
+		
+		if (filter.size() == 1) {
+			String filterField = ((String) filter.keySet().iterator().next());
+			String filterValue = filter.getProperty(filterField);
+			if (this.docAttributeValueCache.containsKey(filterField))
+				return this.getListFieldSummary(filterField, false).getCount(filterValue);
+		}
 		
 		String predicate = this.getDocumentFilter(filter);
 		if ("1=1".equals(predicate))
@@ -3029,16 +3447,4 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		}
 		return whereString.toString();
 	}
-//	
-//	// timestamp format for log entries
-//	private static final String DEFAULT_LOGFILE_DATE_FORMAT = "yyyy.MM.dd HH:mm:ss";
-//	private static final DateFormat LOGFILE_DATE_FORMATTER = new SimpleDateFormat(DEFAULT_LOGFILE_DATE_FORMAT);
-//	
-//	/**
-//	 * write an entry to the log file of this markup process server
-//	 * @param entry the entry to write
-//	 */
-//	private void writeLogEntry(String entry) {
-//		System.out.println(LOGFILE_DATE_FORMATTER.format(new Date()) + ": " + entry);
-//	}
 }

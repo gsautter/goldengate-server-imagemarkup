@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -45,6 +45,7 @@ import java.util.zip.ZipOutputStream;
 import de.uka.ipd.idaho.easyIO.settings.Settings;
 import de.uka.ipd.idaho.gamta.Attributed;
 import de.uka.ipd.idaho.gamta.defaultImplementation.AbstractAttributed;
+import de.uka.ipd.idaho.gamta.util.transfer.DocumentListElement;
 import de.uka.ipd.idaho.goldenGateServer.GoldenGateServerComponentRegistry;
 import de.uka.ipd.idaho.goldenGateServer.GoldenGateServerEventService;
 import de.uka.ipd.idaho.goldenGateServer.aep.GoldenGateAEP;
@@ -54,7 +55,6 @@ import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateIMS;
 import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateIMS.ImsDocumentData;
 import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateImsConstants;
 import de.uka.ipd.idaho.goldenGateServer.ims.data.ImsDocumentList;
-import de.uka.ipd.idaho.goldenGateServer.ims.data.ImsDocumentListElement;
 import de.uka.ipd.idaho.goldenGateServer.res.GoldenGateRES;
 import de.uka.ipd.idaho.goldenGateServer.res.GoldenGateRES.RemoteEventList;
 import de.uka.ipd.idaho.goldenGateServer.res.GoldenGateRES.ResEventFilter;
@@ -82,6 +82,7 @@ public class GoldenGateIMR extends GoldenGateAEP implements GoldenGateImsConstan
 	private static final String GET_DOCUMENT = "IMR_GET_DOCUMENT";
 	private static final String GET_DOCUMENT_ENTRIES = "IMR_GET_DOCUMENT_ENTRIES";
 	private static final String GET_DOCUMENT_LIST = "IMR_GET_DOCUMENT_LIST";
+	private static final String GET_DOCUMENT_LIST_SHARED = "IMR_GET_DOCUMENT_LIST_SHARED";
 	
 	private static final String defaultPassPhrase = "IMR provides remote access!";
 	
@@ -95,14 +96,7 @@ public class GoldenGateIMR extends GoldenGateAEP implements GoldenGateImsConstan
 	/** Constructor passing 'IMR' as the letter code to super constructor
 	 */
 	public GoldenGateIMR() {
-		super("IMR");
-	}
-	
-	/* (non-Javadoc)
-	 * @see de.uka.ipd.idaho.goldenGateServer.aep.GoldenGateAEP#getEventProcessorName()
-	 */
-	protected String getEventProcessorName() {
-		return "ImsReplicator";
+		super("IMR", "ImsReplicator");
 	}
 	
 	/* (non-Javadoc)
@@ -233,7 +227,7 @@ public class GoldenGateIMR extends GoldenGateAEP implements GoldenGateImsConstan
 					ImsDocumentEvent ide = ImsDocumentEvent.parseEvent(rre.paramString);
 					
 					//	check against local update time
-					Attributed docAttributes = ims.getDocumentAttributes(ide.documentId);
+					Attributed docAttributes = ims.getDocumentAttributes(ide.dataId);
 					if (docAttributes != null) {
 						long updateTime = Long.parseLong((String) docAttributes.getAttribute(ORIGINAL_UPDATE_TIME_ATTRIBUTE, docAttributes.getAttribute(UPDATE_TIME_ATTRIBUTE, "0")));
 						if (rre.eventTime < updateTime) {
@@ -243,7 +237,7 @@ public class GoldenGateIMR extends GoldenGateAEP implements GoldenGateImsConstan
 					}
 					
 					//	handle document event
-					dataUpdated(ide.documentId, false, remoteDomain, PRIORITY_LOW);
+					dataUpdated(ide.dataId, false, remoteDomain, PRIORITY_LOW);
 					handleCount++;
 					
 					//	update status
@@ -296,7 +290,7 @@ public class GoldenGateIMR extends GoldenGateAEP implements GoldenGateImsConstan
 				ImsDocumentList remoteDl = getDocumentList(remoteAddress, remotePort);
 				HashMap remoteDlesById = new HashMap();
 				while (remoteDl.hasNextDocument()) {
-					ImsDocumentListElement dle = remoteDl.getNextDocument();
+					DocumentListElement dle = remoteDl.getNextDocument();
 					remoteDlesById.put(((String) dle.getAttribute(DOCUMENT_ID_ATTRIBUTE)), dle);
 				}
 				
@@ -305,9 +299,9 @@ public class GoldenGateIMR extends GoldenGateAEP implements GoldenGateImsConstan
 				HashSet deleteDocIDs = new HashSet();
 				ImsDocumentList localDl = ims.getDocumentListFull();
 				while (localDl.hasNextDocument()) {
-					ImsDocumentListElement localDle = localDl.getNextDocument();
+					DocumentListElement localDle = localDl.getNextDocument();
 					String docId = ((String) localDle.getAttribute(DOCUMENT_ID_ATTRIBUTE));
-					ImsDocumentListElement remoteDle = ((ImsDocumentListElement) remoteDlesById.remove(docId));
+					DocumentListElement remoteDle = ((DocumentListElement) remoteDlesById.remove(docId));
 					
 					//	this one doesn't even exist in the remote domain
 					if (remoteDle == null) {
@@ -385,13 +379,13 @@ public class GoldenGateIMR extends GoldenGateAEP implements GoldenGateImsConstan
 		//	handle update event (simply enqueue for processing and handle asynchronously)
 		if (ide.type == ImsDocumentEvent.UPDATE_TYPE) {
 			this.logInfo("GoldenGateIMR: scheduling update from " + rre.sourceDomainAlias + " (" + rre.sourceDomainAddress + ":" + rre.sourceDomainPort + ") ...");
-			this.dataUpdated(ide.documentId, (ide.version == 1), rre.sourceDomainAlias, PRIORITY_LOW);
+			this.dataUpdated(ide.dataId, (ide.version == 1), rre.sourceDomainAlias, PRIORITY_LOW);
 		}
 		
 		//	handle delete event
 		else if (ide.type == ImsDocumentEvent.DELETE_TYPE) {
 			try {
-				this.ims.deleteDocument(("IMR." + rre.originDomainName), ide.documentId, null);
+				this.ims.deleteDocument(("IMR." + rre.originDomainName), ide.dataId, null);
 			}
 			catch (IOException ioe) {
 				this.logError("GoldenGateIMR: " + ioe.getClass().getName() + " (" + ioe.getMessage() + ") while deleting document.");
@@ -427,7 +421,7 @@ public class GoldenGateIMR extends GoldenGateAEP implements GoldenGateImsConstan
 			protected void performAction(String[] arguments) throws Exception {
 				ImsDocumentList dl = ims.getDocumentListFull();
 				if (dl.hasNextDocument()) {
-					ImsDocumentListElement de = dl.getNextDocument();
+					DocumentListElement de = dl.getNextDocument();
 					RemoteEventList rel = ((GoldenGateRES) res).getEventList(0, GoldenGateIMS.class.getName());
 					HashSet deDuplicator = new HashSet();
 					while (rel.hasNextEvent()) {
@@ -488,17 +482,22 @@ public class GoldenGateIMR extends GoldenGateAEP implements GoldenGateImsConstan
 				}
 				
 				//	send back document entry list
-				ImDocumentEntry[] docEntries = docData.getEntries();
-				output.write(GET_DOCUMENT);
-				output.newLine();
-				output.write(ImDocumentIO.getAttributesString(docData));
-				output.newLine();
-				for (int e = 0; e < docEntries.length; e++) {
-					output.write(docEntries[e].toTabString());
+				try {
+					ImDocumentEntry[] docEntries = docData.getEntries();
+					output.write(GET_DOCUMENT);
 					output.newLine();
+					output.write(ImDocumentIO.getAttributesString(docData));
+					output.newLine();
+					for (int e = 0; e < docEntries.length; e++) {
+						output.write(docEntries[e].toTabString());
+						output.newLine();
+					}
+					output.newLine();
+					output.flush();
 				}
-				output.newLine();
-				output.flush();
+				finally {
+					docData.dispose();
+				}
 			}
 		};
 		cal.add(ca);
@@ -537,20 +536,25 @@ public class GoldenGateIMR extends GoldenGateAEP implements GoldenGateImsConstan
 				output.writeLine(GET_DOCUMENT_ENTRIES);
 				
 				//	send requested entries
-				ZipOutputStream zout = new ZipOutputStream(output);
-				byte[] buffer = new byte[1024];
-				for (int e = 0; e < docEntries.size(); e++) {
-					ImDocumentEntry entry = ((ImDocumentEntry) docEntries.get(e));
-					ZipEntry ze = new ZipEntry(entry.getFileName());
-					ze.setTime(entry.updateTime);
-					zout.putNextEntry(ze);
-					InputStream entryIn = docData.getInputStream(entry);
-					for (int r; (r = entryIn.read(buffer, 0, buffer.length)) != -1;)
-						zout.write(buffer, 0, r);
-					entryIn.close();
-					zout.closeEntry();
+				try {
+					ZipOutputStream zout = new ZipOutputStream(output);
+					byte[] buffer = new byte[1024];
+					for (int e = 0; e < docEntries.size(); e++) {
+						ImDocumentEntry entry = ((ImDocumentEntry) docEntries.get(e));
+						ZipEntry ze = new ZipEntry(entry.getFileName());
+						ze.setTime(entry.updateTime);
+						zout.putNextEntry(ze);
+						InputStream entryIn = docData.getInputStream(entry);
+						for (int r; (r = entryIn.read(buffer, 0, buffer.length)) != -1;)
+							zout.write(buffer, 0, r);
+						entryIn.close();
+						zout.closeEntry();
+					}
+					zout.flush();
 				}
-				zout.flush();
+				finally {
+					docData.dispose();
+				}
 			}
 		};
 		cal.add(ca);
@@ -564,6 +568,22 @@ public class GoldenGateIMR extends GoldenGateAEP implements GoldenGateImsConstan
 				ImsDocumentList dl = ims.getDocumentListFull();
 				
 				output.write(GET_DOCUMENT_LIST);
+				output.newLine();
+				
+				dl.writeData(output);
+			}
+		};
+		cal.add(ca);
+		
+		//	request for document list
+		ca = new ComponentActionNetwork() {
+			public String getActionCommand() {
+				return GET_DOCUMENT_LIST_SHARED;
+			}
+			public void performActionNetwork(BufferedReader input, BufferedWriter output) throws IOException {
+				ImsDocumentList dl = ims.getDocumentListFull();
+				
+				output.write(GET_DOCUMENT_LIST_SHARED);
 				output.newLine();
 				
 				dl.writeData(output);
@@ -605,15 +625,15 @@ public class GoldenGateIMR extends GoldenGateAEP implements GoldenGateImsConstan
 	/* (non-Javadoc)
 	 * @see de.uka.ipd.idaho.goldenGateServer.aep.GoldenGateAEP#doUpdate(java.lang.String, java.lang.String, java.util.Properties, long)
 	 */
-	protected void doUpdate(String dataId, String user, Properties dataAttributes, long params) throws IOException {
+	protected void doUpdate(String dataId, String remoteDomainAlias, Properties dataAttributes, long params) throws IOException {
 		
 		//	get remote domain access data
-		String remoteAddress = this.res.getRemoteDomainAddress(user);
-		int remotePort = this.res.getRemoteDomainPort(user);
+		String remoteAddress = this.res.getRemoteDomainAddress(remoteDomainAlias);
+		int remotePort = this.res.getRemoteDomainPort(remoteDomainAlias);
 		
 		//	do update
-		this.logInfo("GoldenGateIMR: updating from " + user + " (" + remoteAddress + ":" + remotePort + ") ...");
-		this.updateDocument(dataId, remoteAddress, remotePort, user);
+		this.logInfo("GoldenGateIMR: updating from " + remoteDomainAlias + " (" + remoteAddress + ":" + remotePort + ") ...");
+		this.updateDocument(dataId, remoteAddress, remotePort, remoteDomainAlias);
 	}
 	
 	/* (non-Javadoc)
@@ -641,7 +661,12 @@ public class GoldenGateIMR extends GoldenGateAEP implements GoldenGateImsConstan
 			updateDomain = sourceDomainAlias;
 		
 		//	store document
-		this.ims.updateDocumentFromData(updateUser, ("IMR." + updateDomain), docData, null);
+		try {
+			this.ims.updateDocumentFromData(updateUser, ("IMR." + updateDomain), docData, null);
+		}
+		finally {
+			docData.dispose();
+		}
 	}
 	
 	private ImsDocumentData getDocumentData(String docId, String remoteAddress, int remotePort, String remoteDomain) throws IOException {

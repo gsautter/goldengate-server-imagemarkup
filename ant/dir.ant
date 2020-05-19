@@ -12,6 +12,8 @@
 		<mkdir dir="${build.home}" />
 		<mkdir dir="${build.home}/classes" />
 		<mkdir dir="${dist.home}" />
+		<mkdir dir="${dist.home}/Components" />
+		<mkdir dir="${dist.home}/Components/GgServerELSData" />
 		<mkdir dir="${dist.home}/Plugins" />
 	</target>
 	
@@ -39,19 +41,7 @@
 		<!-- copy required libraries -->
 		<copy todir="${dist.home}/Components/Bin">
 			<fileset dir="${lib.home}" includes="BibRefUtils.jar" />
-		</copy>
-		
-		<!-- copy required libraries -->
-		<copy todir="${dist.home}/Components/GgServerIMIData/PdfImporterData">
-			
-			<!-- install base JARs -->
-			<fileset dir="${lib.home}" includes="StringUtils.jar" />
-			<fileset dir="${lib.home}" includes="HtmlXmlUtil.jar" />
-			<fileset dir="${lib.home}" includes="Gamta.jar" />
-			<fileset dir="${lib.home}" includes="mail.jar" />
-			<fileset dir="${lib.home}" includes="EasyIO.jar" />
 			<fileset dir="${lib.home}" includes="GamtaImagingAPI.jar" />
-			<fileset dir="${lib.home}" includes="BibRefUtils.jar" />
 			
 			<!-- install image markup and OCR JARs -->
 			<fileset dir="${lib.home}" includes="ImageMarkup.jar" />
@@ -63,28 +53,6 @@
 			<fileset dir="${lib.home}" includes="icepdf-core.jar" />
 			<fileset dir="${lib.home}" includes="ImageMarkupPDF.jar" />
 			<fileset dir="${lib.home}" includes="ImageMarkupPDF.bin.jar" />
-		</copy>
-		
-		<!-- copy required libraries -->
-		<copy todir="${dist.home}/Components/GgServerIMPData">
-			
-			<!-- base JARs -->
-			<fileset dir="${lib.home}" includes="StringUtils.jar" />
-			<fileset dir="${lib.home}" includes="HtmlXmlUtil.jar" />
-			<fileset dir="${lib.home}" includes="Gamta.jar" />
-			<fileset dir="${lib.home}" includes="mail.jar" />
-			<fileset dir="${lib.home}" includes="EasyIO.jar" />
-			<fileset dir="${lib.home}" includes="GamtaImagingAPI.jar" />
-			<fileset dir="${lib.home}" includes="GamtaFeedbackAPI.jar" />
-			
-			<!-- image markup and OCR JARs -->
-			<fileset dir="${lib.home}" includes="ImageMarkup.jar" />
-			<fileset dir="${lib.home}" includes="ImageMarkup.bin.jar" />
-			<fileset dir="${lib.home}" includes="ImageMarkupOCR.jar" />
-			
-			<!-- PDF decoder JARs -->
-			<fileset dir="${lib.home}" includes="icepdf-core.jar" />
-			<fileset dir="${lib.home}" includes="ImageMarkupPDF.jar" />
 			
 			<!-- GG Imagine JARs -->
 			<fileset dir="${lib.home}" includes="GoldenGATE.jar" />

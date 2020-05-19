@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -37,30 +37,11 @@ import de.uka.ipd.idaho.goldenGateServer.GoldenGateServerConstants;
  */
 public interface GoldenGateImeConstants extends GoldenGateServerConstants, LiteratureConstants {
 	
-	/** the attribute holding the total number of errors in a document list entry retrieved from IME */
-	public static final String ERROR_COUNT_ATTRIBUTE = "errorCount";
-	
-	/** the attribute holding the total number of error categories in a document list entry retrieved from IME */
-	public static final String ERROR_CATEGORY_COUNT_ATTRIBUTE = "errorCategories";
-	
-	/** the attribute holding the total number of error types in a document list entry retrieved from IME */
-	public static final String ERROR_TYPE_COUNT_ATTRIBUTE = "errorTypes";
-	
-	/** the attribute holding the total number of blocker errors in a document list entry retrieved from IME */
-	public static final String BLOCKER_ERROR_COUNT_ATTRIBUTE = "blockerCount";
-	
-	/** the attribute holding the total number of critical errors in a document list entry retrieved from IME */
-	public static final String CRITICAL_ERROR_COUNT_ATTRIBUTE = "criticalCount";
-	
-	/** the attribute holding the total number of major errors in a document list entry retrieved from IME */
-	public static final String MAJOR_ERROR_COUNT_ATTRIBUTE = "majorCount";
-	
-	/** the attribute holding the total number of minor errors in a document list entry retrieved from IME */
-	public static final String MINOR_ERROR_COUNT_ATTRIBUTE = "minorCount";
-	
-	
 	/** the command for loading a list of all documents in the IME, i.e., all the documents that have errors */
 	public static final String GET_DOCUMENT_LIST = "IME_GET_DOCUMENT_LIST";
+	
+	/** the command for loading a list of all documents in the IME, i.e., all the documents that have errors */
+	public static final String GET_DOCUMENT_LIST_SHARED = "IME_GET_DOCUMENT_LIST_SHARED";
 	
 	/** the command for loading the error summary for a document */
 	public static final String GET_ERROR_SUMMARY = "IME_GET_ERROR_SUMMARY";

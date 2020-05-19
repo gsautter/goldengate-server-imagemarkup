@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -61,10 +61,11 @@ import de.uka.ipd.idaho.gamta.util.SgmlDocumentReader;
 import de.uka.ipd.idaho.goldenGateServer.client.GgServerHtmlServlet;
 import de.uka.ipd.idaho.htmlXmlUtil.accessories.HtmlPageBuilder;
 import de.uka.ipd.idaho.plugins.bibRefs.BibRefConstants;
+import de.uka.ipd.idaho.plugins.bibRefs.BibRefDataSource;
 import de.uka.ipd.idaho.plugins.bibRefs.BibRefEditorFormHandler;
 import de.uka.ipd.idaho.plugins.bibRefs.BibRefTypeSystem;
-import de.uka.ipd.idaho.plugins.bibRefs.BibRefUtils;
 import de.uka.ipd.idaho.plugins.bibRefs.BibRefTypeSystem.BibRefType;
+import de.uka.ipd.idaho.plugins.bibRefs.BibRefUtils;
 import de.uka.ipd.idaho.plugins.bibRefs.BibRefUtils.RefData;
 import de.uka.ipd.idaho.plugins.bibRefs.reFinder.ReFinderClient;
 import de.uka.ipd.idaho.plugins.bibRefs.refBank.RefBankClient;
@@ -260,8 +261,8 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 				if (rds[r].hasAttribute("sourceName")) {
 					bw.write("  \"sourceName\": \"" + rds[r].getAttribute("sourceName").replaceAll("\\\"", "'") + "\",");bw.newLine();
 				}
-				if (rds[r].hasAttribute(ReFinderClient.REFERENCE_DATA_SOURCE_ATTRIBUTE)) {
-					bw.write("  \"refSource\": \"" + rds[r].getAttribute(ReFinderClient.REFERENCE_DATA_SOURCE_ATTRIBUTE).replaceAll("\\\"", "'") + "\",");bw.newLine();
+				if (rds[r].hasAttribute(BibRefDataSource.REFERENCE_DATA_SOURCE_ATTRIBUTE)) {
+					bw.write("  \"refSource\": \"" + rds[r].getAttribute(BibRefDataSource.REFERENCE_DATA_SOURCE_ATTRIBUTE).replaceAll("\\\"", "'") + "\",");bw.newLine();
 				}
 				
 				bw.write("  \"refString\": \"" + BibRefUtils.toRefString(rds[r]).replaceAll("\\\"", "'").trim() + "\"");bw.newLine();
@@ -727,11 +728,14 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		for (int t = 0; t < rdIts.length; t++)
 			docAttributes.setProperty(("ID-" + rdIts[t]), rd.getIdentifier(rdIts[t]));
 		
-		//	get input stream for document proper
+		//	get input stream for document proper, as well as source file name
 		FieldValueInputStream docDataSource = data.getFieldByteStream("file");
+		String docFileName = docDataSource.fileName;
+		if ((docFileName != null) && (docFileName.lastIndexOf("/") != -1))
+			docFileName = docFileName.substring(docFileName.lastIndexOf("/") + "/".length());
 		
 		//	send upload to backing IMI
-		Properties uDocAttributes = this.imiClient.uploadDocument(docDataSource, docDataSource.fieldLength, docDataSource.fileName, mimeType, docAttributes, user);
+		Properties uDocAttributes = this.imiClient.uploadDocument(docDataSource, docDataSource.fieldLength, docFileName, mimeType, docAttributes, user);
 		
 		//	send JSON object with upload log array and updated document attributes
 		response.setCharacterEncoding("UTF-8");

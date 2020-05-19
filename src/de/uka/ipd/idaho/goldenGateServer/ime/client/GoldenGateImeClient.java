@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -35,10 +35,10 @@ import java.net.URLEncoder;
 import java.util.Iterator;
 import java.util.Properties;
 
+import de.uka.ipd.idaho.gamta.util.DocumentErrorSummary;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
 import de.uka.ipd.idaho.goldenGateServer.client.ServerConnection.Connection;
 import de.uka.ipd.idaho.goldenGateServer.ime.GoldenGateImeConstants;
-import de.uka.ipd.idaho.goldenGateServer.ime.data.ImeDocumentErrorSummary;
 import de.uka.ipd.idaho.goldenGateServer.ims.data.ImsDocumentList;
 import de.uka.ipd.idaho.goldenGateServer.uaa.client.AuthenticatedClient;
 import de.uka.ipd.idaho.im.util.ImDocumentErrorProtocol;
@@ -179,7 +179,7 @@ public class GoldenGateImeClient implements GoldenGateImeConstants {
 	 * @return the error summary
 	 * @throws IOException
 	 */
-	public ImeDocumentErrorSummary getErrorSummary(String docId) throws IOException {
+	public DocumentErrorSummary getErrorSummary(String docId) throws IOException {
 		
 		//	make sure we're logged in
 		if (!this.authClient.isLoggedIn()) throw new IOException("Not logged in.");
@@ -207,9 +207,9 @@ public class GoldenGateImeClient implements GoldenGateImeConstants {
 				throw new IOException(error);
 			
 			//	get error summary
-			ImeDocumentErrorSummary ides = new ImeDocumentErrorSummary(docId);
-			ImeDocumentErrorSummary.fillErrorSummary(ides, br);
-			return ides;
+			DocumentErrorSummary des = new DocumentErrorSummary(docId);
+			DocumentErrorSummary.fillErrorSummary(des, br);
+			return des;
 		}
 		finally {
 			if (con != null)

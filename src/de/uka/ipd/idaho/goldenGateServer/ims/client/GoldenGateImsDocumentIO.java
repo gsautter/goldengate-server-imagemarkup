@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -30,12 +30,9 @@ package de.uka.ipd.idaho.goldenGateServer.ims.client;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
-import java.awt.GridBagConstraints;
-import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
-import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
@@ -51,27 +48,18 @@ import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Reader;
 import java.net.URL;
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
-import java.util.LinkedHashSet;
-import java.util.LinkedList;
 import java.util.Properties;
-import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
-import javax.swing.JComponent;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JMenu;
@@ -82,12 +70,7 @@ import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JTable;
 import javax.swing.JTextField;
-import javax.swing.ListSelectionModel;
-import javax.swing.event.TableModelEvent;
 import javax.swing.event.TableModelListener;
-import javax.swing.table.DefaultTableColumnModel;
-import javax.swing.table.JTableHeader;
-import javax.swing.table.TableColumn;
 import javax.swing.table.TableModel;
 
 import de.uka.ipd.idaho.easyIO.settings.Settings;
@@ -95,7 +78,11 @@ import de.uka.ipd.idaho.gamta.util.ControllingProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor.CascadingProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.swing.DialogFactory;
+import de.uka.ipd.idaho.gamta.util.swing.DocumentListPanel;
+import de.uka.ipd.idaho.gamta.util.swing.DocumentListPanel.DocumentFilter;
 import de.uka.ipd.idaho.gamta.util.swing.ProgressMonitorDialog;
+import de.uka.ipd.idaho.gamta.util.transfer.DocumentListBuffer;
+import de.uka.ipd.idaho.gamta.util.transfer.DocumentListElement;
 import de.uka.ipd.idaho.goldenGate.plugins.GoldenGatePluginDataProvider;
 import de.uka.ipd.idaho.goldenGate.plugins.PluginDataProviderFileBased;
 import de.uka.ipd.idaho.goldenGate.util.DialogPanel;
@@ -104,7 +91,6 @@ import de.uka.ipd.idaho.goldenGateServer.ims.client.GoldenGateImsClient.Document
 import de.uka.ipd.idaho.goldenGateServer.ims.client.GoldenGateImsClient.FastFetchFilter;
 import de.uka.ipd.idaho.goldenGateServer.ims.client.GoldenGateImsClient.ImsClientDocumentData;
 import de.uka.ipd.idaho.goldenGateServer.ims.data.ImsDocumentList;
-import de.uka.ipd.idaho.goldenGateServer.ims.data.ImsDocumentListBuffer;
 import de.uka.ipd.idaho.goldenGateServer.uaa.client.AuthenticatedClient;
 import de.uka.ipd.idaho.goldenGateServer.uaa.client.AuthenticationManager;
 import de.uka.ipd.idaho.goldenGateServer.uaa.client.AuthenticationManagerPlugin;
@@ -122,7 +108,7 @@ import de.uka.ipd.idaho.stringUtils.csvHandler.StringRelation;
 import de.uka.ipd.idaho.stringUtils.csvHandler.StringTupel;
 
 /**
- * DocumentIO plugin for GoldenGATE Imagine supporting document IO with
+ * DocumentIO plug-in for GoldenGATE Imagine supporting document IO with
  * GoldenGATE Image Markup Document Store. If the backing IMS is unreachable,
  * this client will save documents in a local cache and upload then the next
  * time the the user successfully logs in to the backing IMS. However, if the
@@ -165,8 +151,7 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 	private TreeMap cacheDocumentData = new TreeMap();
 	
 	private HashSet openDocumentIDs = new HashSet();
-	
-	private static final String[] listSortKeys = {DOCUMENT_NAME_ATTRIBUTE};
+	private HashMap openProtocolDialogs = new HashMap();
 	
 	private StringVector listFieldOrder = new StringVector();
 	private StringVector listFields = new StringVector();
@@ -390,6 +375,11 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 	 */
 	public void documentClosed(String docId) {
 		
+		//	close any open update status monitor
+		UploadProtocolDialog upDialog = ((UploadProtocolDialog) this.openProtocolDialogs.get(docId));
+		if (upDialog != null)
+			upDialog.dispose();
+		
 		//	we did not load this one
 		if (!this.openDocumentIDs.remove(docId))
 			return;
@@ -400,7 +390,7 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 			if (cddKey.endsWith(docId)) {
 				ImsClientDocumentData imsDocData = ((ImsClientDocumentData) this.cacheDocumentData.get(cddKey));
 				if (imsDocData != null)
-					imsDocData.stopBackgroundFetching();
+					imsDocData.dispose();
 				cddit.remove();
 			}
 		}
@@ -467,7 +457,7 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 		
 		
 		//	get list of documents
-		ImsDocumentListBuffer documentList;
+		DocumentListBuffer documentList;
 		boolean documentListEmpty = true;
 		
 		//	got server connection, load document list
@@ -477,15 +467,17 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 			//	load document list
 			try {
 				ImsDocumentList dl = this.imsClient.getDocumentList(pm);
+				if (this.cache != null)
+					dl = this.addCacheStatus(dl);
 				for (int f = 0; f < dl.listFieldNames.length; f++) {
 					ImsDocumentList.AttributeSummary das = dl.getListFieldValues(dl.listFieldNames[f]);
 					if ((das != null) && (das.size() != 0)) {
 						documentListEmpty = false;
-						f = dl.listFieldNames.length;
+						break;
 					}
 				}
 				pm.setInfo("Got document list, caching content ...");
-				documentList = new ImsDocumentListBuffer(dl, pm);
+				documentList = new DocumentListBuffer(dl, pm);
 				
 				if (pm instanceof ControllingProgressMonitor) {
 					((ControllingProgressMonitor) pm).setPauseResumeEnabled(false);
@@ -806,7 +798,7 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 			this.openDocumentIDs.add(doc.docId);
 			
 			//	incrementally get upload protocol
-			final UploadProtocolDialog upDialog = new UploadProtocolDialog("Document Upload Protocol", ("Document '" + docName + "' successfully uploaded to GoldenGATE Server at\n" + authManager.getHost() + ":" + authManager.getPort() + "\nDetails:"), uploadProtocol);
+			final UploadProtocolDialog upDialog = new UploadProtocolDialog(doc.docId, "Document Upload Protocol", ("Document '" + docName + "' successfully uploaded to GoldenGATE Server at\n" + authManager.getHost() + ":" + authManager.getPort() + "\nDetails:"), uploadProtocol);
 			Thread upThread = new Thread() {
 				public void run() {
 					while (imsClient != null) {
@@ -831,6 +823,12 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 		catch (IOException ioe) {
 			DialogFactory.alert(("An error occurred while uploading document '" + docName + "' to the GoldenGATE Server at\n" + authManager.getHost() + ":" + authManager.getPort() + "\n" + ioe.getMessage() + ((cachedDocData == null) ? "" : "\n\nThe document has been stored to the local cache\nand will be uploaded when you log in next time.")), ("Error Uploading Document"), JOptionPane.ERROR_MESSAGE);
 			return null;
+		}
+		finally {
+			if ((doc instanceof DataBackedImDocument) && (((DataBackedImDocument) doc).getDocumentData() == cachedDocData))
+				cachedDocData = null; // make sure not to dispose document data still backing document
+			if (cachedDocData != null)
+				cachedDocData.dispose();
 		}
 	}
 	
@@ -917,7 +915,7 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 		}
 	}
 	
-	private ImsClientDocumentData checkoutDocumentDataFromServer(String docId, int version, String docName, FastFetchFilter fff, ProgressMonitor pm) throws IOException {
+	ImsClientDocumentData checkoutDocumentDataFromServer(String docId, int version, String docName, FastFetchFilter fff, ProgressMonitor pm) throws IOException {
 		pm.setInfo("Loading document from GoldenGATE IMS ...");
 		
 		try {
@@ -952,650 +950,121 @@ public class GoldenGateImsDocumentIO extends AbstractGoldenGateImaginePlugin imp
 		}
 	}
 	
-	private final String produceFieldLabel(String fieldName) {
-		String listFieldLabel = this.listFieldLabels.getProperty(fieldName);
-		if (listFieldLabel != null)
-			return listFieldLabel;
-		
-		if (fieldName.length() < 2)
-			return fieldName;
-		
-		StringVector parts = new StringVector();
-		fieldName = Character.toUpperCase(fieldName.charAt(0)) + fieldName.substring(1);
-		int c = 1;
-		while (c < fieldName.length()) {
-			if (Character.isUpperCase(fieldName.charAt(c))) {
-				parts.addElement(fieldName.substring(0, c));
-				fieldName = fieldName.substring(c);
-				c = 1;
-			} else c++;
-		}
-		if (fieldName.length() != 0)
-			parts.addElement(fieldName);
-		
-		for (int p = 0; p < (parts.size() - 1);) {
-			String part1 = parts.get(p);
-			String part2 = parts.get(p + 1);
-			if ((part2.length() == 1) && Character.isUpperCase(part1.charAt(part1.length() - 1))) {
-				part1 += part2;
-				parts.setElementAt(part1, p);
-				parts.remove(p+1);
+	static final String CACHE_STATUS_ATTRIBUTE = "Cache";
+	ImsDocumentList addCacheStatus(final ImsDocumentList dl) {
+		String[] listFieldNames = new String[dl.listFieldNames.length + 1];
+		listFieldNames[0] = CACHE_STATUS_ATTRIBUTE;
+		System.arraycopy(dl.listFieldNames, 0, listFieldNames, 1, dl.listFieldNames.length);
+		return new ImsDocumentList(listFieldNames) {
+			public boolean hasNoSummary(String listFieldName) {
+				return dl.hasNoSummary(listFieldName);
 			}
-			else p++;
-		}
-		
-		return parts.concatStrings(" ");
-	}
-	
-	/**
-	 * Constant set containing the names of document attributes which can be
-	 * used for document list filters. This set is immutable, any modification
-	 * methods are implemented to simply return false.
-	 */
-	private static final Set filterableAttributes = Collections.unmodifiableSet(new LinkedHashSet() {
-		{
-			//	TODO keep this in sync with table definition
-			String[] docTableFields = {
-					
-					//	- identifier data
-//					DOCUMENT_ID_ATTRIBUTE, // nobody will filter by a document ID
-					DOCUMENT_NAME_ATTRIBUTE,
-					
-					//	- meta data
-					DOCUMENT_AUTHOR_ATTRIBUTE,
-					DOCUMENT_DATE_ATTRIBUTE,
-					DOCUMENT_TITLE_ATTRIBUTE,
-					
-					//	- management data
-					CHECKIN_USER_ATTRIBUTE,
-					CHECKIN_TIME_ATTRIBUTE,
-					CHECKOUT_USER_ATTRIBUTE,
-					CHECKOUT_TIME_ATTRIBUTE,
-					UPDATE_USER_ATTRIBUTE,
-					UPDATE_TIME_ATTRIBUTE,
-					DOCUMENT_VERSION_ATTRIBUTE,
-			};
-			Arrays.sort(docTableFields);
-			for (int a = 0; a < docTableFields.length; a++)
-				super.add(docTableFields[a]);
-		}
-	});
-	
-	/**
-	 * Constant set containing the names of numeric document attributes, for
-	 * which specific comparison operators can be used for document list
-	 * filters. This set is immutable, any modification methods are implemented
-	 * to simply return false.
-	 */
-	private static final Set numericAttributes = Collections.unmodifiableSet(new LinkedHashSet() {
-		{
-			//	TODO keep this in sync with table definition
-			String[] numericFieldNames = {
-					DOCUMENT_DATE_ATTRIBUTE,
-					CHECKIN_TIME_ATTRIBUTE,
-					UPDATE_TIME_ATTRIBUTE,
-					CHECKOUT_TIME_ATTRIBUTE,
-					DOCUMENT_VERSION_ATTRIBUTE,
-			};
-			Arrays.sort(numericFieldNames);
-			for (int a = 0; a < numericFieldNames.length; a++)
-				super.add(numericFieldNames[a]);
-		}
-	});
-	
-	/**
-	 * Constant set containing the comparison operators that can be used for
-	 * numeric document attributes in document list filters. This set is
-	 * immutable, any modification methods are implemented to simply return
-	 * false.
-	 */
-	private static final Set numericOperators = Collections.unmodifiableSet(new LinkedHashSet() {
-		{
-			String[] numericOperators = {
-					">",
-					">=",
-					"=",
-					"<=",
-					"<",
-			};
-			Arrays.sort(numericOperators);
-			for (int a = 0; a < numericOperators.length; a++)
-				super.add(numericOperators[a]);
-		}
-	});
-	
-	private class DocumentFilterPanel extends JPanel {
-		
-		private abstract class Filter {
-			final String fieldName;
-			Filter(String fieldName) {
-				this.fieldName = fieldName;
+			public boolean isNumeric(String listFieldName) {
+				return dl.isNumeric(listFieldName);
 			}
-			abstract JComponent getOperatorSelector();
-			abstract String getOperator();
-			abstract JComponent getValueInputField();
-			abstract String[] getFilterValues() throws RuntimeException;
-		}
-		
-		private class StringFilter extends Filter {
-			private String[] suggestionLabels;
-			private Properties suggestionMappings;
-			private boolean editable;
-			private JTextField valueInput;
-			private JComboBox valueSelector;
-			StringFilter(String fieldName, ImsDocumentList.AttributeSummary suggestions, boolean editable) {
-				super(fieldName);
-				if (suggestions == null) 
-					this.editable = true;
-				else {
-					this.editable = editable;
-					this.suggestionLabels = new String[suggestions.elementCount()];
-					this.suggestionMappings = new Properties();
-					for (Iterator sit = suggestions.iterator(); sit.hasNext();) {
-						String suggestion = ((String) sit.next());
-						if (this.editable) {
-							suggestion = suggestion.replaceAll("\\s", "+");
-							this.suggestionLabels[this.suggestionMappings.size()] = suggestion;
-							this.suggestionMappings.setProperty(suggestion, suggestion);
-						}
-						else {
-							String suggestionLabel = (suggestion + " (" + suggestions.getCount(suggestion) + ")");
-							this.suggestionLabels[this.suggestionMappings.size()] = suggestionLabel;
-							this.suggestionMappings.setProperty(suggestionLabel, suggestion);
-						}
-					}
-				}
+			public boolean isFilterable(String listFieldName) {
+				return dl.isFilterable(listFieldName);
 			}
-			JComponent getOperatorSelector() {
-				return new JLabel("contains (use '+' for spaces)", JLabel.CENTER);
+			public boolean hasNextDocument() {
+				return dl.hasNextDocument();
 			}
-			String getOperator() {
-				return null;
+			public DocumentListElement getNextDocument() {
+				DocumentListElement dle = dl.getNextDocument();
+				String docId = ((String) dle.getAttribute(DOCUMENT_ID_ATTRIBUTE));
+				if (docId == null) {}
+				else if (cache.isExplicitCheckout(docId))
+					dle.setAttribute(CACHE_STATUS_ATTRIBUTE, "Localized");
+				else if (cache.containsDocument(docId))
+					dle.setAttribute(CACHE_STATUS_ATTRIBUTE, "Cached");
+				else dle.setAttribute(CACHE_STATUS_ATTRIBUTE, "");
+				return dle;
 			}
-			JComponent getValueInputField() {
-				if (this.suggestionLabels == null) {
-					this.valueInput = new JTextField();
-					this.valueInput.addActionListener(new ActionListener() {
-						public void actionPerformed(ActionEvent ae) {
-							parent.filterDocumentList();
-						}
-					});
-					return this.valueInput;
-				}
-				else {
-					this.valueSelector = new JComboBox(this.suggestionLabels);
-					this.valueSelector.insertItemAt("<do not filter>", 0);
-					this.valueSelector.setSelectedItem("<do not filter>");
-					this.valueSelector.setEditable(this.editable);
-					this.valueSelector.addActionListener(new ActionListener() {
-						public void actionPerformed(ActionEvent ae) {
-							parent.filterDocumentList();
-						}
-					});
-					return this.valueSelector;
-				}
+			public AttributeSummary getListFieldValues(String listFieldName) {
+				return dl.getListFieldValues(listFieldName);
 			}
-			String[] getFilterValues() throws RuntimeException {
-				String filterValue;
-				if (this.suggestionLabels == null)
-					filterValue = this.valueInput.getText().trim();
-				else {
-					filterValue = ((String) this.valueSelector.getSelectedItem()).trim();
-					filterValue = this.suggestionMappings.getProperty(filterValue, filterValue);
-				}
-				
-				if ((filterValue.length() == 0) || "<do not filter>".equals(filterValue))
-					return null;
-				
-				if (this.editable) {
-					String[] filterValues = filterValue.split("\\s++");
-					for (int v = 0; v < filterValues.length; v++)
-						filterValues[v] = filterValues[v].replaceAll("\\+", " ").trim();
-					return filterValues;
-				}
-				else {
-					String[] filterValues = {filterValue};
-					return filterValues;
-				}
+			public int getDocumentCount() {
+				return dl.getDocumentCount();
 			}
-		}
-		
-		private class NumberFilter extends Filter {
-			private String[] operatorLabels;
-			private Properties operatorMappings;
-			private JComboBox operatorSelector;
-			private String[] suggestionLabels;
-			private Properties suggestionMappings;
-			private boolean editable;
-			private JTextField valueInput;
-			private JComboBox valueSelector;
-			NumberFilter(String fieldName, ImsDocumentList.AttributeSummary suggestions, boolean editable, boolean isTime) {
-				super(fieldName);
-				
-				this.operatorLabels = new String[numericOperators.size()];
-				this.operatorMappings = new Properties();
-				for (Iterator oit = numericOperators.iterator(); oit.hasNext();) {
-					String operator = ((String) oit.next());
-					String operatorLabel;
-					if (">".equals(operator))
-						operatorLabel = (isTime ? "after" : "more than");
-					else if (">=".equals(operator))
-						operatorLabel = (isTime ? "the earliest in" : "at least");
-					else if ("=".equals(operator))
-						operatorLabel = "exactly in";
-					else if ("<=".equals(operator))
-						operatorLabel = (isTime ? "the latest in" : "at most");
-					else if ("<".equals(operator))
-						operatorLabel = (isTime ? "before" : "less than");
-					else continue;
-					this.operatorLabels[this.operatorMappings.size()] = operatorLabel;
-					this.operatorMappings.setProperty(operatorLabel, operator);
-				}
-				
-				if (suggestions == null)
-					this.editable = true;
-				else {
-					this.editable = editable;
-					this.suggestionLabels = new String[suggestions.elementCount()];
-					this.suggestionMappings = new Properties();
-					for (Iterator sit = suggestions.iterator(); sit.hasNext();) {
-						String suggestion = ((String) sit.next());
-						if (this.editable) {
-							this.suggestionLabels[this.suggestionMappings.size()] = suggestion;
-							this.suggestionMappings.setProperty(suggestion, suggestion);
-						}
-						else {
-							String suggestionLabel = (suggestion + " (" + suggestions.getCount(suggestion) + ")");
-							this.suggestionLabels[this.suggestionMappings.size()] = suggestionLabel;
-							this.suggestionMappings.setProperty(suggestionLabel, suggestion);
-						}
-					}
-				}
+			public int getRetrievedDocumentCount() {
+				return dl.getRetrievedDocumentCount();
 			}
-			JComponent getOperatorSelector() {
-				this.operatorSelector = new JComboBox(this.operatorLabels);
-				this.operatorSelector.setEditable(false);
-				return this.operatorSelector;
+			public int getRemainingDocumentCount() {
+				return dl.getRemainingDocumentCount();
 			}
-			String getOperator() {
-				String operator = ((String) this.operatorSelector.getSelectedItem()).trim();
-				return this.operatorMappings.getProperty(operator, operator);
-			}
-			JComponent getValueInputField() {
-				if (this.suggestionLabels == null) {
-					this.valueInput = new JTextField();
-					this.valueInput.addActionListener(new ActionListener() {
-						public void actionPerformed(ActionEvent ae) {
-							parent.filterDocumentList();
-						}
-					});
-					return this.valueInput;
-				}
-				else {
-					this.valueSelector = new JComboBox(this.suggestionLabels);
-					this.valueSelector.insertItemAt("<do not filter>", 0);
-					this.valueSelector.setSelectedItem("<do not filter>");
-					this.valueSelector.setEditable(this.editable);
-					this.valueSelector.addActionListener(new ActionListener() {
-						public void actionPerformed(ActionEvent ae) {
-							parent.filterDocumentList();
-						}
-					});
-					return this.valueSelector;
-				}
-			}
-			String[] getFilterValues() throws RuntimeException {
-				String filterValue;
-				if (this.suggestionLabels == null)
-					filterValue = this.valueInput.getText().trim();
-				else {
-					filterValue = ((String) this.valueSelector.getSelectedItem()).trim();
-					filterValue = this.suggestionMappings.getProperty(filterValue, filterValue);
-				}
-				
-				if ((filterValue.length() == 0) || "<do not filter>".equals(filterValue))
-					return null;
-				
-				try {
-					Long.parseLong(filterValue);
-				}
-				catch (NumberFormatException nfe) {
-					throw new RuntimeException("'" + filterValue + "' is not a valid value for " + produceFieldLabel(this.fieldName) + ".");
-				}
-				
-				String[] filterValues = {filterValue};
-				return filterValues;
-			}
-		}
-		
-		private class TimeFilter extends Filter {
-			private String[] operatorLabels;
-			private Properties operatorMappings;
-			private JComboBox operatorSelector;
-			private JComboBox valueSelector;
-			TimeFilter(String fieldName) {
-				super(fieldName);
-				
-				this.operatorLabels = new String[numericOperators.size()];
-				this.operatorMappings = new Properties();
-				for (Iterator oit = numericOperators.iterator(); oit.hasNext();) {
-					String operator = ((String) oit.next());
-					String operatorLabel;
-					if (">".equals(operator))
-						operatorLabel = "less than";
-					else if (">=".equals(operator))
-						operatorLabel = "at most";
-					else if ("=".equals(operator))
-						operatorLabel = "exactly";
-					else if ("<=".equals(operator))
-						operatorLabel = "at least";
-					else if ("<".equals(operator))
-						operatorLabel = "more than";
-					else continue;
-					this.operatorLabels[this.operatorMappings.size()] = operatorLabel;
-					this.operatorMappings.setProperty(operatorLabel, operator);
-				}
-			}
-			JComponent getOperatorSelector() {
-				this.operatorSelector = new JComboBox(this.operatorLabels);
-				this.operatorSelector.setEditable(false);
-				return this.operatorSelector;
-			}
-			String getOperator() {
-				String operator = ((String) this.operatorSelector.getSelectedItem()).trim();
-				return this.operatorMappings.getProperty(operator, operator);
-			}
-			JComponent getValueInputField() {
-				this.valueSelector = new JComboBox();
-				this.valueSelector.addItem("<do not filter>");
-				this.valueSelector.addItem("one hour ago");
-				this.valueSelector.addItem("one day ago");
-				this.valueSelector.addItem("one week ago");
-				this.valueSelector.addItem("one month ago");
-				this.valueSelector.addItem("three months ago");
-				this.valueSelector.addItem("one year ago");
-				this.valueSelector.setEditable(false);
-				return this.valueSelector;
-			}
-			String[] getFilterValues() throws RuntimeException {
-				String filterValue = ((String) this.valueSelector.getSelectedItem()).trim();
-				if ("one hour ago".equals(filterValue))
-					filterValue = ("" + (System.currentTimeMillis() - ((long) (1 * 1 * 60 * 60) * 1000)));
-				else if ("one day ago".equals(filterValue))
-					filterValue = ("" + (System.currentTimeMillis() - ((long) (1 * 24 * 60 * 60) * 1000)));
-				else if ("one week ago".equals(filterValue))
-					filterValue = ("" + (System.currentTimeMillis() - ((long) (7 * 24 * 60 * 60) * 1000)));
-				else if ("one month ago".equals(filterValue))
-					filterValue = ("" + (System.currentTimeMillis() - ((long) (30 * 24 * 60 * 60) * 1000)));
-				else if ("three months ago".equals(filterValue))
-					filterValue = ("" + (System.currentTimeMillis() - ((long) (90 * 24 * 60 * 60) * 1000)));
-				else if ("one year ago".equals(filterValue))
-					filterValue = ("" + (System.currentTimeMillis() - ((long) (365 * 24 * 60 * 60) * 1000)));
-				else return null;
-				String[] filterValues = {filterValue};
-				return filterValues;
-			}
-		}
-		
-		private DocumentListDialog parent;
-		private Filter[] filters;
-		
-		DocumentFilterPanel(ImsDocumentListBuffer docList, DocumentListDialog parent) {
-			super(new GridBagLayout(), true);
-			this.parent = parent;
-			
-			ArrayList filterList = new ArrayList();
-			for (int f = 0; f < docList.listFieldNames.length; f++) {
-				ImsDocumentList.AttributeSummary das = docList.getListFieldValues(docList.listFieldNames[f]);
-				if (!filterableAttributes.contains(docList.listFieldNames[f]) && (das == null))
-					continue;
-				
-				Filter filter;
-				if (numericAttributes.contains(docList.listFieldNames[f])) {
-					if (docList.listFieldNames[f].endsWith("Time"))
-						filter = new TimeFilter(docList.listFieldNames[f]);
-					else filter = new NumberFilter(docList.listFieldNames[f], das, true, DOCUMENT_DATE_ATTRIBUTE.equals(docList.listFieldNames[f]));
-				}
-				else filter = new StringFilter(docList.listFieldNames[f], das, !docList.listFieldNames[f].endsWith("User"));
-				filterList.add(filter);
-			}
-			this.filters = ((Filter[]) filterList.toArray(new Filter[filterList.size()]));
-			
-			GridBagConstraints gbc = new GridBagConstraints();
-			gbc.insets.top = 3;
-			gbc.insets.bottom = 3;
-			gbc.insets.left = 3;
-			gbc.insets.right = 3;
-			gbc.weighty = 0;
-			gbc.gridheight = 1;
-			gbc.gridwidth = 1;
-			gbc.fill = GridBagConstraints.BOTH;
-			gbc.gridy = 0;
-			for (int f = 0; f < this.filters.length; f++) {
-				gbc.gridx = 0;
-				gbc.weightx = 0;
-				this.add(new JLabel(produceFieldLabel(this.filters[f].fieldName), JLabel.LEFT), gbc.clone());
-				gbc.gridx = 1;
-				gbc.weightx = 0;
-				this.add(this.filters[f].getOperatorSelector(), gbc.clone());
-				gbc.gridx = 2;
-				gbc.weightx = 1;
-				this.add(this.filters[f].getValueInputField(), gbc.clone());
-				gbc.gridy++;
-			}
-		}
-		
-		DocumentFilter getFilter() {
-			final LinkedList filterList = new LinkedList();
-			for (int f = 0; f < this.filters.length; f++) {
-				String[] filterValues = this.filters[f].getFilterValues();
-				if ((filterValues == null) || (filterValues.length == 0))
-					continue;
-				
-				System.out.println(this.filters[f].fieldName + " filter value is " + this.flattenArray(filterValues));
-				
-				if (numericAttributes.contains(this.filters[f].fieldName)) {
-					final long filterValue = Long.parseLong(filterValues[0]);
-					final String operator = this.filters[f].getOperator();
-					if ((operator != null) && numericOperators.contains(operator))
-						filterList.addFirst(new DocumentFilter(this.filters[f].fieldName) {
-							boolean passesFilter(StringTupel docData) {
-								String dataValueString = docData.getValue(this.fieldName);
-								if (dataValueString == null)
-									return false;
-								long dataValue;
-								try {
-									dataValue = Long.parseLong(dataValueString);
-								}
-								catch (NumberFormatException nfe) {
-									return false;
-								}
-								if (">".equals(operator))
-									return (dataValue > filterValue);
-								else if (">=".equals(operator))
-									return (dataValue >= filterValue);
-								else if ("=".equals(operator))
-									return (dataValue == filterValue);
-								else if ("<=".equals(operator))
-									return (dataValue <= filterValue);
-								else if ("<".equals(operator))
-									return (dataValue < filterValue);
-								else return true;
-							}
-						});
-				}
-				else {
-					final String[] filterStrings = new String[filterValues.length];
-					for (int v = 0; v < filterValues.length; v++)
-						filterStrings[v] = filterValues[v].replaceAll("\\s++", " ").toLowerCase();
-					for (int s = 0; s < filterStrings.length; s++) {
-						while (filterStrings[s].startsWith("%"))
-							filterStrings[s] = filterStrings[s].substring(1);
-						while (filterStrings[s].endsWith("%"))
-							filterStrings[s] = filterStrings[s].substring(0, (filterStrings[s].length() - 1));
-					}
-					filterList.addLast(new DocumentFilter(this.filters[f].fieldName) {
-						boolean passesFilter(StringTupel docData) {
-							String dataValueString = docData.getValue(this.fieldName);
-							if (dataValueString == null)
-								return false;
-							dataValueString = dataValueString.replaceAll("\\s++", " ").toLowerCase();
-							for (int f = 0; f < filterStrings.length; f++) {
-								if (dataValueString.indexOf(filterStrings[f]) != -1)
-									return true;
-							}
-							return false;
-						}
-					});
-				}
-			}
-			
-			return (filterList.isEmpty() ? null : new DocumentFilter(null) {
-				boolean passesFilter(StringTupel docData) {
-					for (Iterator fit = filterList.iterator(); fit.hasNext();) {
-						if (!((DocumentFilter) fit.next()).passesFilter(docData))
-							return false;
-					}
-					return true;
-				}
-			});
-		}
-		
-		Properties getFilterParameters() {
-			Properties filter = new Properties();
-			for (int f = 0; f < this.filters.length; f++) {
-				String filterValue = this.flattenArray(this.filters[f].getFilterValues());
-				if (filterValue == null)
-					continue;
-				filter.setProperty(this.filters[f].fieldName, filterValue);
-				if (numericAttributes.contains(this.filters[f].fieldName)) {
-					String operator = this.filters[f].getOperator();
-					if ((operator != null) && numericOperators.contains(operator))
-						filter.setProperty((this.filters[f].fieldName + "Operator"), operator);
-				}
-			}
-			return filter;
-		}
-		private String flattenArray(String[] filterValues) {
-			if ((filterValues == null) || (filterValues.length == 0))
-				return null;
-			if (filterValues.length == 1)
-				return filterValues[0];
-			StringBuffer filterValue = new StringBuffer(filterValues[0]);
-			for (int v = 1; v < filterValues.length; v++)
-				filterValue.append("\n" + filterValues[v]);
-			return filterValue.toString();
-		}
-	}
-	
-	private abstract class DocumentFilter {
-		String fieldName;
-		DocumentFilter(String fieldName) {
-			this.fieldName = fieldName;
-		}
-		abstract boolean passesFilter(StringTupel docData);
-	}
-	
-	private static final String[] cacheDocumentListAttributes = {
-		DOCUMENT_ID_ATTRIBUTE,
-		DOCUMENT_NAME_ATTRIBUTE,
-		DOCUMENT_TITLE_ATTRIBUTE,
-		CHECKIN_USER_ATTRIBUTE,
-		CHECKIN_TIME_ATTRIBUTE,
-		UPDATE_USER_ATTRIBUTE,
-		UPDATE_TIME_ATTRIBUTE,
-		DOCUMENT_VERSION_ATTRIBUTE,
-	};
-	
-	private static final String DEFAULT_TIMESTAMP_DATE_FORMAT = "yyyy-MM-dd HH:mm:ss";
-	private static final DateFormat TIMESTAMP_DATE_FORMAT = new SimpleDateFormat(DEFAULT_TIMESTAMP_DATE_FORMAT);
-	
-	/* TODO
-reduce document list loading effort:
-- for non-admin users, only transfer document list head with input suggestions for filters
-- embed list size in header
-  - facilitates displaying list loading progress
-  - facilitates detailed message for selectivity of filter
-- display message label in place of document list table if list too large
-- in ImsDocumentIO, reload list from server when filter button clicked
- */
-	private static class StringTupelTray {
-		final StringTupel data;
-		Object[] sortKey = new Object[0];
-		StringTupelTray(StringTupel data) {
-			this.data = data;
-		}
-		void updateSortKey(StringVector sortFields) {
-			this.sortKey = new Object[sortFields.size()];
-			for (int f = 0; f < sortFields.size(); f++)
-				this.sortKey[f] = this.data.getValue(sortFields.get(f), "");
-		}
+		};
 	}
 	
 	private class DocumentListDialog extends DialogPanel {
-		private static final String CACHE_STATUS_ATTRIBUTE = "Cache";
-		private ImsDocumentListBuffer docList;
-		private StringTupelTray[] listData;
+		private DocumentListBuffer docList;
 		
-		private JTable docTable = new JTable();
-		private DocumentTableModel docTableModel;
+		private DocumentListPanel docListPanel;
 		
-		private DocumentFilterPanel filterPanel;
-		
-		private ImDocumentData loadDocData = null;
+		private ImsClientDocumentData loadDocData = null;
 		
 		private String userName;
 		private boolean isAdmin;
 		
 		private String title;
-//		
-//		private SpinnerNumberModel readTimeout = new SpinnerNumberModel(5, 0, 60, 5);
 		
-		DocumentListDialog(String title, ImsDocumentListBuffer docList, String userName, boolean isAdmin) {
+		DocumentListDialog(String title, DocumentListBuffer docList, String userName, boolean isAdmin) {
 			super(title, true);
 			this.title = title;
 			this.userName = userName;
 			this.isAdmin = isAdmin;
 			this.docList = docList;
 			
-			this.filterPanel = new DocumentFilterPanel(this.docList, this);
-			
-			final JTableHeader header = this.docTable.getTableHeader();
-			if (header != null)
-				header.addMouseListener(new MouseAdapter() {
-					public void mouseClicked(MouseEvent me) {
-						if (docTableModel == null)
-							return;
-		                int column = header.columnAtPoint(me.getPoint());
-		                if (column != -1)
-		                	sortList(docTableModel.getFieldName(column));
-					}
-				});
-			
-			this.docTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-			this.docTable.addMouseListener(new MouseAdapter() {
-				public void mouseClicked(MouseEvent me) {
-					int row = docTable.getSelectedRow();
-					if (row == -1)
-						return;
-					if ("Local Master Configuration".equals(imagineParent.getConfigurationName()))
-						System.out.println("Selected document '" + listData[row].data.getValue(DOCUMENT_NAME_ATTRIBUTE) + "' (" + listData[row].data.getValue(DOCUMENT_ID_ATTRIBUTE) + ")");					
-					if (me.getClickCount() > 1)
-						open(row, 0);
-					else if (me.getButton() != MouseEvent.BUTTON1)
-						showContextMenu(row, me);
+			this.docListPanel = new DocumentListPanel(docList, true) {
+				protected boolean applyDocumentFilter(DocumentFilter filter) {
+					return loadFilterDocumentList(filter);
 				}
-			});
-			
-			JScrollPane docTableBox = new JScrollPane(this.docTable);
-			docTableBox.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+				protected boolean displayField(String fieldName, boolean isEmpty) {
+					return (isEmpty ? CACHE_STATUS_ATTRIBUTE.equals(fieldName) : (!DOCUMENT_ID_ATTRIBUTE.equals(fieldName)));
+				}
+				public String getListFieldLabel(String fieldName) {
+					if (listFieldLabels.containsKey(fieldName))
+						return listFieldLabels.getProperty(fieldName);
+					else return super.getListFieldLabel(fieldName);
+				}
+				protected boolean isUtcTimeField(String fieldName) {
+					return (false
+							|| CHECKIN_TIME_ATTRIBUTE.equals(fieldName)
+							|| UPDATE_TIME_ATTRIBUTE.equals(fieldName)
+							|| CHECKOUT_TIME_ATTRIBUTE.equals(fieldName)
+						);
+				}
+				protected void documentSelected(StringTupel docData, boolean doubleClick) {
+					if (doubleClick)
+						open(docData, 0);
+				}
+				protected JPopupMenu getContextMenu(StringTupel docData, MouseEvent me) {
+					return buildContextMenu(docData, me);
+				}
+				protected void documentListChanged() {
+					adjustTitle();
+				}
+			};
+			if (cache == null) {
+				this.docListPanel.setListFields(listFields);
+				this.docListPanel.setListFieldOrder(listFieldOrder);
+			}
+			else {
+				StringVector cListFields = new StringVector();
+				cListFields.addElement(CACHE_STATUS_ATTRIBUTE);
+				cListFields.addContent(listFields);
+				this.docListPanel.setListFields(cListFields);
+				StringVector cListFieldOrder = new StringVector();
+				cListFieldOrder.addElement(CACHE_STATUS_ATTRIBUTE);
+				cListFieldOrder.addContent(listFieldOrder);
+				this.docListPanel.setListFieldOrder(cListFieldOrder);
+			}
+			this.docListPanel.refreshDocumentList(); // need to make configuration show
 			
 			JButton filterButton = new JButton("Filter");
 			filterButton.setBorder(BorderFactory.createRaisedBevelBorder());
 			filterButton.setPreferredSize(new Dimension(100, 21));
 			filterButton.addActionListener(new ActionListener() {
 				public void actionPerformed(ActionEvent ae) {
-					filterDocumentList();
+					docListPanel.filterDocumentList();
 				}
 			});
 			
@@ -1604,7 +1073,9 @@ reduce document list loading effort:
 			okButton.setPreferredSize(new Dimension(100, 21));
 			okButton.addActionListener(new ActionListener() {
 				public void actionPerformed(ActionEvent ae) {
-					openSelected();
+					StringTupel docData = docListPanel.getSelectedDocument();
+					if (docData != null)
+						open(docData, 0);
 				}
 			});
 			
@@ -1629,230 +1100,74 @@ reduce document list loading effort:
 						fetchModeButton.setToolTipText(fastFetchFilterLabel);
 				}
 			});
-//			
-//			JSpinner readTimeoutSelector = new JSpinner(this.readTimeout);
-//			JLabel readTimeoutLabel = new JLabel("Read Timeout (in seconds, 0 means no timeout)", JLabel.RIGHT);
-//			JPanel readTimeoutPanel = new JPanel(new FlowLayout());
-//			readTimeoutPanel.add(readTimeoutLabel);
-//			readTimeoutPanel.add(readTimeoutSelector);
-//			readTimeoutPanel.setBorder(BorderFactory.createEtchedBorder());
 			
 			JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
 			buttonPanel.add(filterButton);
-//			buttonPanel.add(readTimeoutPanel);
 			buttonPanel.add(okButton);
 			buttonPanel.add(cancelButton);
 			buttonPanel.add(fetchModeButton);
 			
-			this.add(this.filterPanel, BorderLayout.NORTH);
-			this.add(docTableBox, BorderLayout.CENTER);
+			this.add(this.docListPanel, BorderLayout.CENTER);
 			this.add(buttonPanel, BorderLayout.SOUTH);
+			this.adjustTitle();
 			
 			this.setSize(new Dimension(800, 800));
-			
-			this.updateListData(null);
 		}
 		
-		private void setDocumentList(ImsDocumentListBuffer docList) {
+		void adjustTitle() {
+			if (this.docListPanel == null)
+				return; // happens when call comes from constructor
+			int docCount = this.docListPanel.getDocumentCount();
+			int vDocCount = this.docListPanel.getVisibleDocumentCount();
+			if (vDocCount == docCount)
+				this.setTitle(this.title + " (" + docCount + " documents)");
+			else this.setTitle(this.title + " (" + vDocCount + " of " + docCount + " documents passing filter)");
+		}
+		
+		private void setDocumentList(DocumentListBuffer docList) {
 			this.docList = docList;
-			this.updateListData(null);
+			this.docListPanel.setDocumentList(this.docList);
 		}
 		
-		private void updateListData(DocumentFilter filter) {
-			if (filter == null) {
-				this.listData = new StringTupelTray[this.docList.size()];
-				for (int d = 0; d < this.docList.size(); d++)
-					this.listData[d] = new StringTupelTray(this.docList.get(d));
-				this.setTitle(this.title + " (" + this.docList.size() + " documents)");
-			}
-			else {
-				ArrayList listDataList = new ArrayList();
-				for (int d = 0; d < this.docList.size(); d++) {
-					StringTupel docData = this.docList.get(d);
-					if (filter.passesFilter(docData))
-						listDataList.add(docData);
-				}
-				this.listData = new StringTupelTray[listDataList.size()];
-				for (int d = 0; d < listDataList.size(); d++)
-					this.listData[d] = new StringTupelTray((StringTupel) listDataList.get(d));
-				this.setTitle(this.title + " (" + this.listData.length + " of " + this.docList.size() + " documents passing filter)");
-			}
+		boolean loadFilterDocumentList(DocumentFilter filter) {
 			
-			StringVector fieldNames = new StringVector();
-			if (cache != null) {
-				fieldNames.addElement(CACHE_STATUS_ATTRIBUTE);
-				for (int d = 0; d < this.listData.length; d++) {
-					String docId = this.listData[d].data.getValue(DOCUMENT_ID_ATTRIBUTE);
-					if (docId == null)
-						continue;
-					else if (cache.isExplicitCheckout(docId))
-						this.listData[d].data.setValue(CACHE_STATUS_ATTRIBUTE, "Localized");
-					else if (cache.containsDocument(docId))
-						this.listData[d].data.setValue(CACHE_STATUS_ATTRIBUTE, "Cached");
-					else this.listData[d].data.setValue(CACHE_STATUS_ATTRIBUTE, "");
-				}
-			}
-			fieldNames.addContent(listFieldOrder);
-			for (int f = 0; f < this.docList.listFieldNames.length; f++) {
-				String fieldName = this.docList.listFieldNames[f];
-				if (!DOCUMENT_ID_ATTRIBUTE.equals(fieldName))
-					fieldNames.addElementIgnoreDuplicates(fieldName);
-			}
-			System.out.println("Field names are " + fieldNames.concatStrings(", "));
-			
-			for (int f = 0; f < fieldNames.size(); f++) {
-				String fieldName = fieldNames.get(f);
-				if (CACHE_STATUS_ATTRIBUTE.equals(fieldName))
-					continue;
-				
-				if (!listFields.contains(fieldName)) {
-					fieldNames.remove(f--);
-					continue;
-				}
-				
-				boolean fieldEmpty = true;
-				for (int d = 0; d < this.listData.length; d++)
-					if (!"".equals(this.listData[d].data.getValue(fieldName, ""))) {
-						fieldEmpty = false;
-						d = this.listData.length;
-					}
-				if (fieldEmpty)
-					fieldNames.remove(f--);
-			}
-			
-			this.docTableModel = new DocumentTableModel(fieldNames.toStringArray(), this.listData);
-			this.docTable.setColumnModel(new DefaultTableColumnModel() {
-				public TableColumn getColumn(int columnIndex) {
-					TableColumn tc = super.getColumn(columnIndex);
-					String fieldName = docTableModel.getColumnName(columnIndex);
-					if (DOCUMENT_TITLE_ATTRIBUTE.equals(fieldName))
-						return tc;
-					
-					if (docTableModel.listData.length == 0) {
-						tc.setPreferredWidth(70);
-						tc.setMinWidth(70);
-					}
-					else if (false
-							|| CHECKIN_TIME_ATTRIBUTE.equals(fieldName)
-							|| UPDATE_TIME_ATTRIBUTE.equals(fieldName)
-							|| CHECKOUT_TIME_ATTRIBUTE.equals(fieldName)
-							) {
-						tc.setPreferredWidth(120);
-						tc.setMinWidth(120);
-					}
-					else if (CACHE_STATUS_ATTRIBUTE.equals(fieldName)) {
-						tc.setPreferredWidth(70);
-						tc.setMinWidth(70);
-					}
-					else {
-						String test = docTableModel.getValueAt(0, columnIndex).toString().replaceAll("\\<[A-Z\\/]++\\>", "");
-						tc.setPreferredWidth(test.matches("[0-9]++") ? 50 : 100);
-						tc.setMinWidth(test.matches("[0-9]++") ? 50 : 100);
-					}
-					
-					tc.setResizable(true);
-					
-					return tc;
-				}
-			});
-			this.docTable.setModel(this.docTableModel);
-			
-			this.sortList(null);
-			
-			this.docTable.validate();
-			this.docTable.repaint();
-		}
-		
-		void filterDocumentList() {
+			//	we have our data, we're all set
+			if (this.docList.size() != 0)
+				return false;
 			
 			//	received list head only so far
-			if (this.docList.isEmpty()) {
-				ImsDocumentListBuffer documentList;
-				boolean documentListEmpty = true;
-				Properties filter = this.filterPanel.getFilterParameters();
-				try {
-					//	TODO use splash screen
-					ImsDocumentList dl = imsClient.getDocumentList(filter, ProgressMonitor.dummy);
-					for (int f = 0; f < dl.listFieldNames.length; f++) {
-						ImsDocumentList.AttributeSummary das = dl.getListFieldValues(dl.listFieldNames[f]);
-						if ((das != null) && (das.size() != 0)) {
-							documentListEmpty = false;
-							f = dl.listFieldNames.length;
-						}
+			DocumentListBuffer documentList;
+			boolean documentListEmpty = true;
+			try {
+				//	TODO use splash screen
+				ImsDocumentList dl = imsClient.getDocumentList(filter.toProperties(), ProgressMonitor.dummy);
+				if (cache != null)
+					dl = addCacheStatus(dl);
+				for (int f = 0; f < dl.listFieldNames.length; f++) {
+					ImsDocumentList.AttributeSummary das = dl.getListFieldValues(dl.listFieldNames[f]);
+					if ((das != null) && (das.size() != 0)) {
+						documentListEmpty = false;
+						f = dl.listFieldNames.length;
 					}
-					documentList = new ImsDocumentListBuffer(dl);
-					if (documentList.isEmpty() && documentListEmpty)
-						DialogFactory.alert(("Currently, there are no documents available from the GoldenGATE Server at\n" + authManager.getHost() + ":" + authManager.getPort() + ",\nor your filter is too restrictive."), "No Documents To Load", JOptionPane.INFORMATION_MESSAGE);
-					this.setDocumentList(documentList);
 				}
-				catch (IOException ioe) {
-					ioe.printStackTrace(System.out);
-					DialogFactory.alert(("An error occurred while loading the document list from the GoldenGATE Server at\n" + authManager.getHost() + ":" + authManager.getPort() + "\n" + ioe.getMessage()), "Error Getting Filtered List", JOptionPane.ERROR_MESSAGE);
-				}
+				documentList = new DocumentListBuffer(dl);
+				if (documentList.isEmpty() && documentListEmpty)
+					DialogFactory.alert(("Currently, there are no documents available from the GoldenGATE Server at\n" + authManager.getHost() + ":" + authManager.getPort() + ",\nor your filter is too restrictive."), "No Documents To Load", JOptionPane.INFORMATION_MESSAGE);
+				this.setDocumentList(documentList);
 			}
-			
-			//	filter local list
-			else this.updateListData(this.filterPanel.getFilter());
+			catch (IOException ioe) {
+				ioe.printStackTrace(System.out);
+				DialogFactory.alert(("An error occurred while loading the document list from the GoldenGATE Server at\n" + authManager.getHost() + ":" + authManager.getPort() + "\n" + ioe.getMessage()), "Error Getting Filtered List", JOptionPane.ERROR_MESSAGE);
+			}
+			return true;
 		}
 		
-		void sortList(String sortField) {
-			final StringVector sortFields = new StringVector();
-			if (sortField != null)
-				sortFields.addElement(sortField);
-			sortFields.addContent(listSortKeys);
-			
-			//	update sort keys, and check which fields are numeric
-			boolean[] isFieldNumeric = new boolean[sortFields.size()];
-			Arrays.fill(isFieldNumeric, true);
-			for (int d = 0; d < this.listData.length; d++) {
-				this.listData[d].updateSortKey(sortFields);
-				for (int f = 0; f < isFieldNumeric.length; f++) {
-					if (isFieldNumeric[f]) try {
-						Integer.parseInt((String) this.listData[d].sortKey[f]);
-					}
-					catch (NumberFormatException nfe) {
-						isFieldNumeric[f] = false;
-					}
-				}
-			}
-			
-			//	make field values numeric only if they are numeric throughout the list
-			for (int d = 0; d < this.listData.length; d++) {
-				for (int f = 0; f < isFieldNumeric.length; f++) {
-					if (isFieldNumeric[f])
-						this.listData[d].sortKey[f] = new Integer((String) this.listData[d].sortKey[f]);
-				}
-			}
-			
-			//	sort list (catching comparison errors that can occur in Java 7)
-			Arrays.sort(this.listData, new Comparator() {
-				public int compare(Object o1, Object o2) {
-					StringTupelTray st1 = ((StringTupelTray) o1);
-					StringTupelTray st2 = ((StringTupelTray) o2);
-					int c = 0;
-					for (int f = 0; f < st1.sortKey.length; f++) {
-						if (st1.sortKey[f] instanceof Integer)
-							c = (((Integer) st1.sortKey[f]).intValue() - ((Integer) st2.sortKey[f]).intValue());
-						else c = ((String) st1.sortKey[f]).compareToIgnoreCase((String) st2.sortKey[f]);
-						if (c != 0)
-							return c;
-					}
-					return 0;
-				}
-			});
-			
-			//	update display
-			this.docTableModel.update();
-			this.docTable.validate();
-			this.docTable.repaint();
-		}
-		
-		void delete(int row) {
-			if ((imsClient == null) || (row == -1))
+		void delete(StringTupel docData) {
+			if ((imsClient == null) || (docData == null))
 				return;
 			
 			//	get document data
-			String docId = this.listData[row].data.getValue(DOCUMENT_ID_ATTRIBUTE);
+			String docId = docData.getValue(DOCUMENT_ID_ATTRIBUTE);
 			if (docId == null)
 				return;
 			
@@ -1868,42 +1183,29 @@ reduce document list loading effort:
 				DialogFactory.alert("The document has been deleted.", "Document Deleted", JOptionPane.INFORMATION_MESSAGE);
 				
 				//	update data
-				StringTupelTray[] newListData = new StringTupelTray[this.listData.length - 1];
-				System.arraycopy(this.listData, 0, newListData, 0, row);
-				System.arraycopy(this.listData, (row+1), newListData, row, (newListData.length - row));
-				this.listData = newListData;
-				
-				//	update display
-				this.docTableModel.setListData(this.listData);
-				this.docTable.validate();
-				this.docTable.repaint();
+				this.docList.remove(docData);
+				this.docListPanel.refreshDocumentList();
 			}
 			catch (IOException ioe) {
 				DialogFactory.alert(("Document could not be deleted:\n" + ioe.getMessage()), "Error Deleting Document", JOptionPane.ERROR_MESSAGE);
 			}
 		}
 		
-		void openSelected() {
-			int row = docTable.getSelectedRow();
-			if (row == -1)
+		void open(StringTupel docData, final int version) {
+			if (docData == null)
 				return;
-			open(row, 0);
-		}
-		
-		void open(int row, final int version) {
-			if (row == -1) return;
 			
 			//	get document data
-			final String docId = this.listData[row].data.getValue(DOCUMENT_ID_ATTRIBUTE);
+			final String docId = docData.getValue(DOCUMENT_ID_ATTRIBUTE);
 			if (docId == null)
 				return;
-			final String docName = this.listData[row].data.getValue(DOCUMENT_NAME_ATTRIBUTE);
+			final String docName = docData.getValue(DOCUMENT_NAME_ATTRIBUTE);
 			
 			//	create progress monitor
-			final ProgressMonitorDialog pmd = new ProgressMonitorDialog(false, true, DialogPanel.getTopWindow(), "Loading Document from GoldenGATE IMS ...");
+			final ProgressMonitorDialog pmd = new ProgressMonitorDialog(false, true, DialogPanel.getTopWindow(), "Loading Document from GoldenGATE DIO ...");
 			pmd.setAbortExceptionMessage("ABORTED BY USER");
 			pmd.setInfoLineLimit(1);
-			pmd.getWindow().setSize(400, 150);
+			pmd.getWindow().setSize(400, 100);
 			pmd.getWindow().setLocationRelativeTo(pmd.getWindow().getOwner());
 			
 			//	load in separate thread
@@ -1961,19 +1263,21 @@ reduce document list loading effort:
 			pmd.popUp(true);
 		}
 		
-		void showContextMenu(final int row, MouseEvent me) {
-			if (row == -1) return;
+		private JPopupMenu buildContextMenu(final StringTupel docData, MouseEvent me) {
+			if (docData == null)
+				return null;
 			
-			final String docId = this.listData[row].data.getValue(DOCUMENT_ID_ATTRIBUTE);
-			if (docId == null) return;
+			final String docId = docData.getValue(DOCUMENT_ID_ATTRIBUTE);
+			if (docId == null)
+				return null;
 			
 			int preVersion = 0;
 			try {
-				preVersion = Integer.parseInt(this.listData[row].data.getValue(DOCUMENT_VERSION_ATTRIBUTE, "0"));
+				preVersion = Integer.parseInt(docData.getValue(DOCUMENT_VERSION_ATTRIBUTE, "0"));
 			} catch (NumberFormatException e) {}
 			final int version = preVersion;
 			
-			String preCheckoutUser = this.listData[row].data.getValue(CHECKOUT_USER_ATTRIBUTE);
+			String preCheckoutUser = docData.getValue(CHECKOUT_USER_ATTRIBUTE);
 			if ((preCheckoutUser != null) && (preCheckoutUser.trim().length() == 0))
 				preCheckoutUser = null;
 			final String checkoutUser = preCheckoutUser;
@@ -1986,7 +1290,7 @@ reduce document list loading effort:
 				mi = new JMenuItem("Load Document");
 				mi.addActionListener(new ActionListener() {
 					public void actionPerformed(ActionEvent ae) {
-						open(row, 0);
+						open(docData, 0);
 					}
 				});
 				menu.add(mi);
@@ -2000,7 +1304,7 @@ reduce document list loading effort:
 						mi = new JMenuItem("Version " + openVersion + ((openVersion == version) ? " (most recent)" : ""));
 						mi.addActionListener(new ActionListener() {
 							public void actionPerformed(ActionEvent ae) {
-								open(row, ((openVersion == version) ? 0 : openVersion));
+								open(docData, ((openVersion == version) ? 0 : openVersion));
 							}
 						});
 						versionMenu.add(mi);
@@ -2014,7 +1318,7 @@ reduce document list loading effort:
 					mi = new JMenuItem("Delete Document");
 					mi.addActionListener(new ActionListener() {
 						public void actionPerformed(ActionEvent ae) {
-							delete(row);
+							delete(docData);
 						}
 					});
 					menu.add(mi);
@@ -2029,7 +1333,7 @@ reduce document list loading effort:
 						mi = new JMenuItem("Release Document");
 						mi.addActionListener(new ActionListener() {
 							public void actionPerformed(ActionEvent ae) {
-								releaseDocumentFromCache(docId, listData[row].data);
+								releaseDocumentFromCache(docId, docData);
 							}
 						});
 						menu.add(mi);
@@ -2041,13 +1345,11 @@ reduce document list loading effort:
 						mi.addActionListener(new ActionListener() {
 							public void actionPerformed(ActionEvent ae) {
 								cache.markExplicitCheckout(docId);
-								listData[row].data.setValue(CACHE_STATUS_ATTRIBUTE, "Localized");
+								docData.setValue(CACHE_STATUS_ATTRIBUTE, "Localized");
 								
 								DialogFactory.alert("Document cached successfully.", "Document Cached", JOptionPane.INFORMATION_MESSAGE);
 								
-								docTableModel.update();
-								docTable.validate();
-								docTable.repaint();
+								docListPanel.refreshDocumentList();
 							}
 						});
 						menu.add(mi);
@@ -2058,7 +1360,7 @@ reduce document list loading effort:
 						mi = new JMenuItem("Cache Document");
 						mi.addActionListener(new ActionListener() {
 							public void actionPerformed(ActionEvent ae) {
-								checkoutDocumentToCache(docId, listData[row].data);
+								checkoutDocumentToCache(docId, docData);
 							}
 						});
 						menu.add(mi);
@@ -2077,14 +1379,13 @@ reduce document list loading effort:
 							if (cache != null)
 								cache.unstoreDocument(docId);
 							imsClient.releaseDocument(docId);
-							listData[row].data.removeValue(CHECKOUT_USER_ATTRIBUTE);
-							listData[row].data.removeValue(CHECKOUT_TIME_ATTRIBUTE);
-							listData[row].data.removeValue(CACHE_STATUS_ATTRIBUTE);
+							docData.removeValue(CHECKOUT_USER_ATTRIBUTE);
+							docData.removeValue(CHECKOUT_TIME_ATTRIBUTE);
+							docData.removeValue(CACHE_STATUS_ATTRIBUTE);
 							
 							DialogFactory.alert("Document unlocked successfully.", "Document Unlocked", JOptionPane.INFORMATION_MESSAGE);
-							docTableModel.update();
-							docTable.validate();
-							docTable.repaint();
+							
+							docListPanel.refreshDocumentList();
 						}
 						catch (IOException ioe) {
 							DialogFactory.alert(("An error occurred while unlocking the document.\n" + ioe.getClass().getName() + ": " + ioe.getMessage()), "Error Unlocking Document", JOptionPane.ERROR_MESSAGE);
@@ -2097,7 +1398,7 @@ reduce document list loading effort:
 				menu.add(mi);
 			}
 			
-			menu.show(this.docTable, me.getX(), me.getY());
+			return menu;
 		}
 		
 		void checkoutDocumentToCache(final String docId, final StringTupel docData) {
@@ -2127,9 +1428,7 @@ reduce document list loading effort:
 						
 						DialogFactory.alert("Document cached successfully.", "Document Cached", JOptionPane.INFORMATION_MESSAGE);
 						
-						docTableModel.update();
-						docTable.validate();
-						docTable.repaint();
+						docListPanel.refreshDocumentList();
 					}
 					catch (RuntimeException re) {
 						if (!"ABORTED BY USER".equals(re.getMessage()))
@@ -2173,7 +1472,7 @@ reduce document list loading effort:
 							try {
 								pmd.setInfo("Uploading document from cache ...");
 								String[] uploadProtocol = imsClient.updateDocumentFromData(docId, cDocData, pmd);
-								UploadProtocolDialog uploadProtocolDialog = new UploadProtocolDialog("Document Upload Protocol", ("Document '" + docName + "' successfully uploaded to GoldenGATE Server at\n" + authManager.getHost() + ":" + authManager.getPort() + "\nDetails:"), uploadProtocol);
+								UploadProtocolDialog uploadProtocolDialog = new UploadProtocolDialog(docId, "Document Upload Protocol", ("Document '" + docName + "' successfully uploaded to GoldenGATE Server at\n" + authManager.getHost() + ":" + authManager.getPort() + "\nDetails:"), uploadProtocol);
 								uploadProtocolDialog.setVisible(true);
 							}
 							catch (IOException ioe) {
@@ -2190,9 +1489,7 @@ reduce document list loading effort:
 						
 						DialogFactory.alert("Document released successfully.", "Document Released", JOptionPane.INFORMATION_MESSAGE);
 						
-						docTableModel.update();
-						docTable.validate();
-						docTable.repaint();
+						docListPanel.refreshDocumentList();
 					}
 					catch (IOException ioe) {
 						DialogFactory.alert(("An error occurred while releasing the document from the local cache.\n" + ioe.getClass().getName() + ": " + ioe.getMessage()), "Error Releasing Document", JOptionPane.ERROR_MESSAGE);
@@ -2219,94 +1516,14 @@ reduce document list loading effort:
 		}
 	}
 	
-	private class DocumentTableModel implements TableModel {
-		
-		/** the filed names of the table (raw column names) */
-		public final String[] fieldNames;
-		
-		/** an array holding the string tupels that contain the document data to display */
-		protected StringTupelTray[] listData;
-		
-		/**
-		 * @param fieldNames
-		 */
-		protected DocumentTableModel(String[] fieldNames, StringTupelTray[] listData) {
-			this.fieldNames = fieldNames;
-			this.listData = listData;
-		}
-		
-		void setListData(StringTupelTray[] listData) {
-			this.listData = listData;
-			this.update();
-		}
-		
-		private ArrayList listeners = new ArrayList();
-		public void addTableModelListener(TableModelListener tml) {
-			this.listeners.add(tml);
-		}
-		public void removeTableModelListener(TableModelListener tml) {
-			this.listeners.remove(tml);
-		}
-		
-		/**
-		 * Update the table, refreshing the display.
-		 */
-		public void update() {
-			for (int l = 0; l < this.listeners.size(); l++)
-				((TableModelListener) this.listeners.get(l)).tableChanged(new TableModelEvent(this));
-		}
-		
-		/**
-		 * Retrieve the field name at some index.
-		 * @param columnIndex the index of the desired field name
-		 * @return the field name at the specified index
-		 */
-		public String getFieldName(int columnIndex) {
-			return this.fieldNames[columnIndex];
-		}
-		
-		public String getColumnName(int columnIndex) {
-			return produceFieldLabel(this.fieldNames[columnIndex]);
-		}
-		public Class getColumnClass(int columnIndex) {
-			return String.class;
-		}
-		public int getColumnCount() {
-			return this.fieldNames.length;
-		}
-		public int getRowCount() {
-			return this.listData.length;
-		}
-		public boolean isCellEditable(int rowIndex, int columnIndex) {
-			return false;
-		}
-		public void setValueAt(Object aValue, int rowIndex, int columnIndex) {}
-		
-		public Object getValueAt(int rowIndex, int columnIndex) {
-			String fieldName = this.fieldNames[columnIndex];
-			String fieldValue = this.listData[rowIndex].data.getValue(this.fieldNames[columnIndex], "");
-			
-			//	format timestamp
-			if (false
-					|| CHECKIN_TIME_ATTRIBUTE.equals(fieldName)
-					|| UPDATE_TIME_ATTRIBUTE.equals(fieldName)
-					|| CHECKOUT_TIME_ATTRIBUTE.equals(fieldName)
-					) {
-				if (fieldValue.matches("[0-9]++")) try {
-					fieldValue = TIMESTAMP_DATE_FORMAT.format(new Date(Long.parseLong(fieldValue)));
-				} catch (NumberFormatException e) {}
-			}
-			
-			return (fieldValue);
-		}
-	}
-	
 	private class UploadProtocolDialog extends JFrame {
+		private String docId;
 		private String[] uploadProtocol = new String[0];
 		private JTable protocolList;
 		private JButton closeButton;
-		UploadProtocolDialog(String title, String label, String[] up) {
+		UploadProtocolDialog(String docId, String title, String label, String[] up) {
 			super(title);
+			this.docId = docId;
 			this.setIconImage(parent.getGoldenGateIcon());
 			this.protocolList = new JTable(new TableModel() {
 				public int getColumnCount() {
@@ -2366,7 +1583,7 @@ reduce document list loading effort:
 			if (this.uploadProtocol.length == up.length)
 				return;
 			this.uploadProtocol = up;
-			this.protocolList.validate();
+			this.protocolList.revalidate();
 			this.protocolList.repaint();
 			if ((this.uploadProtocol.length != 0) && (UPDATE_COMPLETE.equals(this.uploadProtocol[this.uploadProtocol.length-1]) || DELETION_COMPLETE.equals(this.uploadProtocol[this.uploadProtocol.length-1]))) {
 				this.closeButton.setText("OK");
@@ -2374,11 +1591,27 @@ reduce document list loading effort:
 				this.closeButton.repaint();
 			}
 			this.setVisible(true);
+			openProtocolDialogs.put(this.docId, this);
 			this.validate();
 			this.repaint();
 			this.toFront();
 		}
+		public void dispose() {
+			super.dispose();
+			openProtocolDialogs.remove(this.docId);
+		}
 	}
+	
+	private static final String[] cacheDocumentListAttributes = {
+		DOCUMENT_ID_ATTRIBUTE,
+		DOCUMENT_NAME_ATTRIBUTE,
+		DOCUMENT_TITLE_ATTRIBUTE,
+		CHECKIN_USER_ATTRIBUTE,
+		CHECKIN_TIME_ATTRIBUTE,
+		UPDATE_USER_ATTRIBUTE,
+		UPDATE_TIME_ATTRIBUTE,
+		DOCUMENT_VERSION_ATTRIBUTE,
+	};
 	
 	private static final String EXPLICIT_CHECKOUT = "EC";
 	private static final String DIRTY = "D";
@@ -2473,6 +1706,9 @@ reduce document list loading effort:
 				return dataProvider.getInputStream(this.docCachePrefix + entry.getFileName());
 			}
 			public OutputStream getOutputStream(final String entryName, boolean writeDirectly) throws IOException {
+				
+				//	check file name
+				checkEntryName(entryName);
 				
 				//	write to buffer first, as we cannot rename via a data provider
 				return new DataHashOutputStream(new ByteArrayOutputStream()) {
@@ -2628,8 +1864,8 @@ reduce document list loading effort:
 			this.storeMetaData();
 		}
 		
-		synchronized ImsDocumentListBuffer getDocumentList() {
-			ImsDocumentListBuffer documentList = new ImsDocumentListBuffer(cacheDocumentListAttributes);
+		synchronized DocumentListBuffer getDocumentList() {
+			DocumentListBuffer documentList = new DocumentListBuffer(cacheDocumentListAttributes);
 			for (Iterator cdit = this.cacheMetaData.values().iterator(); cdit.hasNext();) {
 				StringTupel dmd = ((StringTupel) cdit.next());
 				StringTupel listDmd = new StringTupel();
@@ -2697,11 +1933,15 @@ reduce document list loading effort:
 				StringTupel dmd = ((StringTupel) cdit.next());
 				String docId = dmd.getValue(DOCUMENT_ID_ATTRIBUTE);
 				String docName = dmd.getValue(DOCUMENT_NAME_ATTRIBUTE);
+				if (docId == null)
+					continue; // WFT
+				if (docName == null)
+					continue; // WFT
+				if (!this.isDirty(docId))
+					continue; // nothing to upload
 				
-				//	got required meta data
-				if ((docId != null) && this.isDirty(docId) && (docName != null)) try {
-					
-					//	get document data
+				//	load and upload document data
+				try {
 					ImDocumentData docData = this.getDocumentData(docId);
 					String[] uploadLog = imsClient.updateDocumentFromData(docId, docData, ProgressMonitor.dummy);
 					System.out.println("Cached document '" + docId + "' uploaded to GoldenGATE Server at " + this.host + ":");
@@ -2718,21 +1958,25 @@ reduce document list loading effort:
 		
 		synchronized void cleanup(GoldenGateImsClient imsClient) {
 			
-			//	upload current version of all dirty documents
+			//	release all documents that are not open and not explicitly checked out
 			for (Iterator cdit = (new ArrayList(this.cacheMetaData.values())).iterator(); cdit.hasNext();) {
 				StringTupel dmd = ((StringTupel) cdit.next());
 				String docId = dmd.getValue(DOCUMENT_ID_ATTRIBUTE);
+				if (docId == null)
+					continue; // WFT
+				if (this.isExplicitCheckout(docId))
+					continue; // requiring explicit release from user
+				if (this.isOpen(docId))
+					continue; // we release this one on closing
 				
 				//	got required meta data
-				if ((docId != null) && !this.isExplicitCheckout(docId) && !this.isOpen(docId)) {
-					try {
-						this.unstoreDocument(docId);
-						imsClient.releaseDocument(docId);
-					}
-					catch (IOException ioe) {
-						System.out.println(ioe.getClass().getName() + " (" + ioe.getMessage() + ") while releasing cached document '" + docId + "' at GoldenGATE Server at " + this.host);
-						ioe.printStackTrace(System.out);
-					}
+				try {
+					this.unstoreDocument(docId);
+					imsClient.releaseDocument(docId);
+				}
+				catch (IOException ioe) {
+					System.out.println(ioe.getClass().getName() + " (" + ioe.getMessage() + ") while releasing cached document '" + docId + "' at GoldenGATE Server at " + this.host);
+					ioe.printStackTrace(System.out);
 				}
 			}
 		}

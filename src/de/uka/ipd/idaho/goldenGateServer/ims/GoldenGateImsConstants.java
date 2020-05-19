@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -30,13 +30,14 @@ package de.uka.ipd.idaho.goldenGateServer.ims;
 import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
 import de.uka.ipd.idaho.goldenGateServer.GoldenGateServerConstants;
 import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateIMS.ImsDocumentData;
+import de.uka.ipd.idaho.goldenGateServer.util.DataObjectUpdateConstants;
 
 /**
  * Constant bearer for GoldenGATE Image Markup Storage facility.
  * 
  * @author sautter
  */
-public interface GoldenGateImsConstants extends GoldenGateServerConstants, ImagingConstants {
+public interface GoldenGateImsConstants extends GoldenGateServerConstants, ImagingConstants, DataObjectUpdateConstants {
 	
 	/** the command for loading a document */
 	public static final String GET_DOCUMENT = "IMS_GET_DOCUMENT";
@@ -68,6 +69,9 @@ public interface GoldenGateImsConstants extends GoldenGateServerConstants, Imagi
 	/** the command for loading a list of all documents in the IMS */
 	public static final String GET_DOCUMENT_LIST = "IMS_GET_DOCUMENT_LIST";
 	
+	/** the command for loading a list of all documents in the IMS */
+	public static final String GET_DOCUMENT_LIST_SHARED = "IMS_GET_DOCUMENT_LIST_SHARED";
+	
 	/** the command for retrieving the update protocol of document, i.e. messages that describe which other modifications the new version incurred throughout the server (only modifications that happen synchronously on update notification, though) */
 	public static final String GET_UPDATE_PROTOCOL = "IMS_GET_UPDATE_PROTOCOL";
 	
@@ -88,26 +92,8 @@ public interface GoldenGateImsConstants extends GoldenGateServerConstants, Imagi
 	public static final String DELETE_DOCUMENT_PERMISSION = "IMS.DeleteDocument";
 	
 	
-	/** the attribute holding the name of the user who uploaded a document */
-	public static final String CHECKIN_USER_ATTRIBUTE = "checkinUser";
-
-	/** the attribute holding the time when a document was uploaded */
-	public static final String CHECKIN_TIME_ATTRIBUTE = "checkinTime";
-
-	/** the attribute holding the name of the user who last updated a document */
-	public static final String UPDATE_USER_ATTRIBUTE = "updateUser";
-
-	/** the attribute holding the time when a document was last updated */
-	public static final String UPDATE_TIME_ATTRIBUTE = "updateTime";
-	
 	/** the attribute holding the name of a document */
 	public static final String DOCUMENT_VERSION_ATTRIBUTE = "docVersion";
-	
-	/** the attribute holding the name of the user who has currently checked out a document for working */
-	public static final String CHECKOUT_USER_ATTRIBUTE = "checkoutUser";
-	
-	/** the attribute holding the time when a document was checked out */
-	public static final String CHECKOUT_TIME_ATTRIBUTE = "checkoutTime";
 	
 	
 	/**
@@ -116,11 +102,7 @@ public interface GoldenGateImsConstants extends GoldenGateServerConstants, Imagi
 	 * 
 	 * @author sautter
 	 */
-	public static class ImsDocumentEvent extends GoldenGateServerEvent {
-		public static final int UPDATE_TYPE = 0;
-		public static final int DELETE_TYPE = 1;
-		public static final int CHECKOUT_TYPE = 2;
-		public static final int RELEASE_TYPE = 4;
+	public static class ImsDocumentEvent extends DataObjectEvent {
 		
 		/**
 		 * Specialized storage listener for GoldenGATE IMS, receiving notifications of
@@ -183,24 +165,12 @@ public interface GoldenGateImsConstants extends GoldenGateServerConstants, Imagi
 		}
 		
 		
-		/** The name of the user who caused the event */
-		public final String user;
-		
-		/** The ID of the document affected by the event */
-		public final String documentId;
-		
 		/**
 		 * The data of document affected by the event, null for deletion events.
 		 * This document data is strictly read-only, any attempt of modification
 		 * will result in a RuntimException being thrown.
 		 */
 		public final ImsDocumentData documentData;
-		
-		/**
-		 * The current version number of the document affected by this event, -1
-		 * for deletion events
-		 */
-		public final int version;
 		
 		/**
 		 * Constructor for update events
@@ -210,6 +180,7 @@ public interface GoldenGateImsConstants extends GoldenGateServerConstants, Imagi
 		 * @param version the current version number of the document (after the
 		 *            update)
 		 * @param sourceClassName the class name of the component issuing the event
+		 * @param eventTime the timstamp of the event
 		 * @param logger a DocumentStorageLogger to collect log messages while the
 		 *            event is being processed in listeners
 		 */
@@ -222,6 +193,7 @@ public interface GoldenGateImsConstants extends GoldenGateServerConstants, Imagi
 		 * @param user the name of the user who caused the event
 		 * @param documentId the ID of the document that was deleted
 		 * @param sourceClassName the class name of the component issuing the event
+		 * @param eventTime the timstamp of the event
 		 * @param logger a DocumentStorageLogger to collect log messages while the
 		 *            event is being processed in listeners
 		 */
@@ -236,24 +208,15 @@ public interface GoldenGateImsConstants extends GoldenGateServerConstants, Imagi
 		 * @param documentData the data of the document that was updated
 		 * @param version the current version number of the document (after the
 		 *            update)
+		 * @param type the event type (used for dispatching)
 		 * @param sourceClassName the class name of the component issuing the event
+		 * @param eventTime the timstamp of the event
 		 * @param logger a DocumentStorageLogger to collect log messages while the
 		 *            event is being processed in listeners
-		 * @param type the event type (used for dispatching)
 		 */
 		public ImsDocumentEvent(String user, String documentId, ImsDocumentData documentData, int version, int type, String sourceClassName, long eventTime, EventLogger logger) {
-			super(type, sourceClassName, eventTime, (documentId + "-" + eventTime), logger);
-			this.user = user;
-			this.documentId = documentId;
+			super(user, documentId, version, type, sourceClassName, eventTime, logger);
 			this.documentData = documentData;
-			this.version = version;
-		}
-		
-		/* (non-Javadoc)
-		 * @see de.uka.ipd.idaho.goldenGateServer.GoldenGateServerConstants.GoldenGateServerEvent#getParameterString()
-		 */
-		public String getParameterString() {
-			return (super.getParameterString() + " " + this.user + " " + this.documentId + " " + this.version);
 		}
 		
 		/**

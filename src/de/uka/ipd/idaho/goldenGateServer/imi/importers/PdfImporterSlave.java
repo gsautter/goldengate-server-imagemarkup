@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -28,19 +28,23 @@
 package de.uka.ipd.idaho.goldenGateServer.imi.importers;
 
 import java.io.BufferedInputStream;
+import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.net.URL;
 import java.util.HashMap;
 
 import javax.imageio.ImageIO;
 
 import de.uka.ipd.idaho.gamta.util.AnalyzerDataProvider;
 import de.uka.ipd.idaho.gamta.util.AnalyzerDataProviderFileBased;
+import de.uka.ipd.idaho.gamta.util.ParallelJobRunner;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImageInputStream;
@@ -50,6 +54,9 @@ import de.uka.ipd.idaho.goldenGateServer.ims.util.StandaloneDocumentStyleProvide
 import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.ImSupplement;
 import de.uka.ipd.idaho.im.pdf.PdfExtractor;
+import de.uka.ipd.idaho.im.pdf.PdfFontDecoder;
+import de.uka.ipd.idaho.im.pdf.PdfFontDecoder.CustomFontDecoderCharset;
+import de.uka.ipd.idaho.im.pdf.PdfFontDecoder.FontDecoderCharset;
 import de.uka.ipd.idaho.im.util.ImDocumentIO;
 import de.uka.ipd.idaho.im.util.ImSupplementCache;
 
@@ -71,6 +78,9 @@ public class PdfImporterSlave {
 		String outPath = null;
 		String cacheBasePath = ".";
 		String cpuMode = "M";
+		String fontMode = "V";
+		String fontCharSet = "U";
+		String fontCharSetPath = null;
 		String docStylePath = null;
 		for (int a = 0; a < args.length;) {
 			/* source parameter -s
@@ -94,11 +104,38 @@ public class PdfImporterSlave {
 				docStylePath = args[a+1];
 				a += 2;
 			}
-			/* path parameter -p
+			/* number of processors parameter -p
 			 * - missing or set to M: multiple processors
+			 * - set to positive integer: number of cores
 			 * - set to S: single processor */
 			else if ("-p".equalsIgnoreCase(args[a]) && ((a+1) < args.length)) {
 				cpuMode = args[a+1];
+				a += 2;
+			}
+			/* font mode parameter -f
+			 * - set to D: decode all
+			 * - missing or set to V: verify mapped
+			 * - set to U: decode unmapped
+			 * - set to R: render glyphs only
+			 * - set to Q: no decoding (quick mode) */
+			else if ("-f".equalsIgnoreCase(args[a]) && ((a+1) < args.length)) {
+				fontMode = args[a+1];
+				a += 2;
+			}
+			/* font charset parameter -cs
+			 * - missing or set to U: Unicode
+			 * - set to F: full Latin
+			 * - set to E: extended Latin
+			 * - set to B: basic Latin
+			 * - set to C: custom (path to come in -cp) */
+			else if ("-cs".equalsIgnoreCase(args[a]) && ((a+1) < args.length)) {
+				fontCharSet = args[a+1];
+				a += 2;
+			}
+			/* font charset path parameter -cp
+			 * - path to load custom charset from */
+			else if ("-cp".equalsIgnoreCase(args[a]) && ((a+1) < args.length)) {
+				fontCharSetPath = args[a+1];
 				a += 2;
 			}
 			/* source type parameter -t
@@ -126,8 +163,20 @@ public class PdfImporterSlave {
 			printError("Invalid source type '" + sourceType + "'");
 			return;
 		}
-		if (("MS".indexOf(cpuMode) == -1) || (cpuMode.length() != 1)) {
+		if ((("MS".indexOf(cpuMode) == -1) || (cpuMode.length() != 1)) && !cpuMode.matches("[1-9][0-9]*")) {
 			printError("Invalid CPU usage mode '" + cpuMode + "'");
+			return;
+		}
+		if (("DVURQ".indexOf(fontMode) == -1) || (fontMode.length() != 1)) {
+			printError("Invalid font decoding mode '" + fontMode + "'");
+			return;
+		}
+		if (("UFEBC".indexOf(fontCharSet) == -1) || (fontCharSet.length() != 1)) {
+			printError("Invalid font decoding charset '" + fontCharSet + "'");
+			return;
+		}
+		if ("C".equals(fontCharSet) && (fontCharSetPath == null)) {
+			printError("Missing font decoding charset path for charset '" + fontCharSet + "'");
 			return;
 		}
 		
@@ -186,6 +235,32 @@ public class PdfImporterSlave {
 			}
 		};
 		
+		//	get charset
+		FontDecoderCharset useFontCharSet;
+		if ("Q".equals(fontMode))
+			useFontCharSet = PdfFontDecoder.NO_DECODING;
+		else if ("R".equals(fontMode))
+			useFontCharSet = PdfFontDecoder.RENDER_ONLY;
+		else {
+			if ("U".equals(fontCharSet))
+				useFontCharSet = PdfFontDecoder.UNICODE;
+			else if ("F".equals(fontCharSet))
+				useFontCharSet = PdfFontDecoder.LATIN_FULL;
+			else if ("E".equals(fontCharSet))
+				useFontCharSet = PdfFontDecoder.LATIN;
+			else if ("B".equals(fontCharSet))
+				useFontCharSet = PdfFontDecoder.LATIN_BASIC;
+			else if ("C".equals(fontCharSet))
+				useFontCharSet = readCustomCharSet(fontCharSetPath);
+			else return;
+			
+			//	add font mode if required
+			if ("U".equals(fontMode))
+				useFontCharSet = FontDecoderCharset.union(useFontCharSet, PdfFontDecoder.DECODE_UNMAPPED);
+			else if ("V".equals(fontMode))
+				useFontCharSet = FontDecoderCharset.union(useFontCharSet, PdfFontDecoder.VERIFY_MAPPED);
+		}
+		
 		//	silence System.out
 		System.setOut(new PrintStream(new OutputStream() {
 			public void write(int b) throws IOException {}
@@ -196,18 +271,24 @@ public class PdfImporterSlave {
 		PageImageStore pis = new PisPageImageStore(new File(cacheBasePath + "/PageImages/"));
 		PageImage.addPageImageSource(pis);
 		
+		//	switch parallel jobs to linear or limited parallel execution if requested to
+		if ("M".equals(cpuMode)) {}
+		else if ("S".equals(cpuMode))
+			ParallelJobRunner.setLinear(true);
+		else ParallelJobRunner.setMaxCores(Integer.parseInt(cpuMode));
+		
 		//	create PDF extractor
 		final File supplementFolder = new File(cacheBasePath + "/Supplements/");
 		if (!supplementFolder.exists())
 			supplementFolder.mkdirs();
-		PdfExtractor pdfExtractor = new PisPdfExtractor(new File("."), new File(cacheBasePath), pis, "M".equals(cpuMode), supplementFolder);
+		PdfExtractor pdfExtractor = new PisPdfExtractor(new File("."), new File(cacheBasePath), pis, true, supplementFolder);
 		
 		//	decode input PDF
 		ImDocument imDoc;
 		if ("G".equals(sourceType))
 			imDoc = pdfExtractor.loadGenericPdf(pdfBytes, pm);
 		else if ("D".equals(sourceType))
-			imDoc = pdfExtractor.loadTextPdf(pdfBytes, pm);
+			imDoc = pdfExtractor.loadTextPdf(pdfBytes, useFontCharSet, pm);
 		else if ("S".equals(sourceType))
 			imDoc = pdfExtractor.loadImagePdf(pdfBytes, false, pm);
 		else if ("M".equals(sourceType))
@@ -219,6 +300,16 @@ public class PdfImporterSlave {
 		
 		//	write output to folder
 		ImDocumentIO.storeDocument(imDoc, outFile, pm);
+	}
+	
+	private static FontDecoderCharset readCustomCharSet(String path) throws IOException {
+		BufferedReader fdcIn;
+		if (path.startsWith("http://") || path.startsWith("https://"))
+			fdcIn = new BufferedReader(new InputStreamReader((new URL(path)).openStream(), "UTF-8"));
+		else if (path.startsWith("/") || (path.indexOf(":\\") != -1))
+			fdcIn = new BufferedReader(new InputStreamReader(new FileInputStream(new File(path)), "UTF-8"));
+		else throw new IllegalArgumentException("Inavlid charset path " + path);
+		return CustomFontDecoderCharset.readCharSet("Custom", fdcIn);
 	}
 	
 	private static class PisPageImageStore extends AbstractPageImageStore {

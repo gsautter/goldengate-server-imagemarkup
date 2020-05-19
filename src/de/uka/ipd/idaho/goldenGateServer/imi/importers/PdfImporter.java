@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -28,15 +28,12 @@
 package de.uka.ipd.idaho.goldenGateServer.imi.importers;
 
 import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.io.OutputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
@@ -44,9 +41,11 @@ import de.uka.ipd.idaho.easyIO.settings.Settings;
 import de.uka.ipd.idaho.easyIO.util.RandomByteSource;
 import de.uka.ipd.idaho.gamta.Gamta;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
+import de.uka.ipd.idaho.gamta.util.imaging.DocumentStyle;
 import de.uka.ipd.idaho.goldenGateServer.imi.GoldenGateIMI.ImiDocumentImport;
 import de.uka.ipd.idaho.goldenGateServer.imi.ImiDocumentImporter;
 import de.uka.ipd.idaho.goldenGateServer.ims.util.StandaloneDocumentStyleProvider;
+import de.uka.ipd.idaho.goldenGateServer.util.SlaveInstallerUtils;
 import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.util.ImDocumentIO;
 import de.uka.ipd.idaho.stringUtils.StringVector;
@@ -57,9 +56,12 @@ import de.uka.ipd.idaho.stringUtils.StringVector;
  * @author sautter
  */
 public class PdfImporter extends ImiDocumentImporter {
+	private int maxSlaveMemory = 4096;
+	private int maxSlaveCores = 1;
 	private String docStyleListUrl;
 	private String docStyleNamePattern;
 	private File docStyleFolder;
+	private DocumentStyle.Provider docStyleProvider;
 	private String fontCharsetPath;
 	
 	/** the usual zero-argument constructor for class loading */
@@ -80,18 +82,19 @@ public class PdfImporter extends ImiDocumentImporter {
 		//	load settings from data path
 		Settings config = Settings.loadSettings(new File(this.dataPath, "config.cnfg"));
 		
+		//	get maximum memory and CPU core limit for slave process
+		try {
+			this.maxSlaveMemory = Integer.parseInt(config.getSetting("maxSlaveMemory", ("" + this.maxSlaveMemory)));
+		} catch (RuntimeException re) {}
+		try {
+			this.maxSlaveCores = Integer.parseInt(config.getSetting("maxSlaveCores", ("" + this.maxSlaveCores)));
+		} catch (RuntimeException re) {}
+		
 		//	make document style templates available (we can do without, however)
-		//	TODO load this on first use (won't work before ECS is up and available)
 		this.docStyleListUrl = config.getSetting("docStyleListUrl");
-		if (this.docStyleListUrl != null) try {
-			this.docStyleNamePattern = config.getSetting("docStyleNamePattern");
-			this.docStyleFolder = new File(this.workingFolder, "DocStyles");
-			this.docStyleFolder.mkdirs();
-			new StandaloneDocumentStyleProvider(this.docStyleListUrl, this.docStyleNamePattern, this.docStyleFolder);
-		}
-		catch (IOException ioe) {
-			ioe.printStackTrace(System.out);
-		}
+		this.docStyleNamePattern = config.getSetting("docStyleNamePattern");
+		this.docStyleFolder = new File(this.workingFolder, "DocStyles");
+		this.docStyleFolder.mkdirs();
 		
 		//	get font decoding charset path (file or URL)
 		this.fontCharsetPath = config.getSetting("fontCharsetPath", "fontDecoderCharset.cnfg");
@@ -113,70 +116,8 @@ public class PdfImporter extends ImiDocumentImporter {
 			}
 		}
 		
-		//	install base JARs
-		this.installJar("StringUtils.jar");
-		this.installJar("HtmlXmlUtil.jar");
-		this.installJar("Gamta.jar");
-		this.installJar("mail.jar");
-		this.installJar("EasyIO.jar");
-		this.installJar("GamtaImagingAPI.jar");
-		this.installJar("BibRefUtils.jar");
-		
-		//	install image markup and OCR JARs
-		this.installJar("ImageMarkup.jar");
-		this.installJar("ImageMarkup.bin.jar");
-		this.installJar("ImageMarkupOCR.jar");
-		this.installJar("ImageMarkupOCR.bin.jar");
-		
-		//	install PDF decoder JARs
-		this.installJar("icepdf-core.jar");
-		this.installJar("ImageMarkupPDF.jar");
-		this.installJar("ImageMarkupPDF.bin.jar");
-		
-		//	install own source JAR to run slave from
-		this.installJar(null);
-	}
-	
-	private void installJar(String name) {
-		File source;
-		if (name == null) {
-			name = this.dataPath.getName();
-			name = name.substring(0, (name.length() - "Data".length()));
-			name = (name + ".jar");
-			System.out.println("Installing JAR '" + name + "'");
-			source = new File(this.dataPath.getAbsoluteFile().getParentFile(), name);
-		}
-		else {
-			System.out.println("Installing JAR '" + name + "'");
-			source = new File(this.dataPath, name);
-		}
-		if (!source.exists())
-			throw new RuntimeException("Missing JAR: " + name);
-		
-		File target = new File(this.workingFolder, name);
-		if ((target.lastModified() + 1000) > source.lastModified()) {
-			System.out.println(" ==> up to date");
-			return;
-		}
-		
-		try {
-			InputStream sourceIn = new BufferedInputStream(new FileInputStream(source));
-			OutputStream targetOut = new BufferedOutputStream(new FileOutputStream(target));
-			byte[] buffer = new byte[1024];
-			for (int r; (r = sourceIn.read(buffer, 0, buffer.length)) != -1;)
-				targetOut.write(buffer, 0, r);
-			targetOut.flush();
-			targetOut.close();
-			sourceIn.close();
-			System.out.println(" ==> installed");
-		}
-		catch (IOException ioe) {
-			throw new RuntimeException("Could not install JAR '" + name + "': " + ioe.getMessage());
-		}
-		catch (Exception e) {
-			e.printStackTrace(System.out);
-			throw new RuntimeException("Could not install JAR '" + name + "': " + e.getMessage());
-		}
+		//	install slave JAR to run it all from
+		SlaveInstallerUtils.installSlaveJar("PdfImporterSlave.jar", this.dataPath, this.workingFolder, true);
 	}
 	
 	/* (non-Javadoc)
@@ -202,6 +143,15 @@ public class PdfImporter extends ImiDocumentImporter {
 	}
 	
 	private void doHandleImport(ImiDocumentImport idi) throws IOException {
+		
+		//	create document style provider on demand (now that we're sure ECS is up and available)
+		if (this.docStyleProvider == null) try {
+			this.docStyleProvider = new StandaloneDocumentStyleProvider(this.docStyleListUrl, this.docStyleNamePattern, this.docStyleFolder);
+		}
+		catch (IOException ioe) {
+			this.parent.logError("Could not load document style templates, URL invalid or broken");
+			this.parent.logError(ioe);
+		}
 		
 		//	create document cache folder
 		File docCacheFolder = new File(this.cacheFolder, ("cache-" + idi.hashCode()));
@@ -241,8 +191,9 @@ public class PdfImporter extends ImiDocumentImporter {
 		StringVector command = new StringVector();
 		command.addElement("java");
 		command.addElement("-jar");
-		command.addElement("-Xmx2048m");
-		command.addElement("PdfImporter.jar");
+		if (this.maxSlaveMemory > 512)
+			command.addElement("-Xmx" + this.maxSlaveMemory + "m");
+		command.addElement("PdfImporterSlave.jar");
 		
 		//	add parameters
 		command.addElement("-s"); // source: file from importer job
@@ -250,7 +201,15 @@ public class PdfImporter extends ImiDocumentImporter {
 		command.addElement("-c"); // cache: cache folder
 		command.addElement(docCacheFolder.getAbsolutePath());
 		command.addElement("-p"); // CPU usage: single (slower, but we don't want to knock out the whole server)
-		command.addElement("S");
+//		command.addElement("S");
+		int maxSlaveCores = this.maxSlaveCores;
+		if (maxSlaveCores < 1)
+			maxSlaveCores = 65536;
+		if ((maxSlaveCores * 4) > Runtime.getRuntime().availableProcessors())
+			maxSlaveCores = (Runtime.getRuntime().availableProcessors() / 4);
+		if (maxSlaveCores == 1)
+			command.addElement("S");
+		else command.addElement("" + maxSlaveCores);
 		if (this.docStyleFolder != null) {
 			command.addElement("-y"); // style path: the folder holding document styles
 			command.addElement(this.docStyleFolder.getAbsolutePath());
@@ -293,12 +252,13 @@ public class PdfImporter extends ImiDocumentImporter {
 		BufferedReader importerIn = new BufferedReader(new InputStreamReader(importer.getInputStream()));
 		for (String inLine; (inLine = importerIn.readLine()) != null;) {
 			if (inLine.startsWith("S:"))
-				System.out.println(inLine.substring("S:".length()));
-			else if (inLine.startsWith("I:")) {}
+				host.logInfo(inLine.substring("S:".length()));
+			else if (inLine.startsWith("I:"))
+				host.logDebug(inLine.substring("I:".length()));
 			else if (inLine.startsWith("P:")) {}
 			else if (inLine.startsWith("BP:")) {}
 			else if (inLine.startsWith("MP:")) {}
-			else System.out.println(inLine);
+			else host.logInfo(inLine);
 		}
 		
 		//	wait for decoder to finish
@@ -308,7 +268,17 @@ public class PdfImporter extends ImiDocumentImporter {
 		} catch (InterruptedException ie) {}
 		
 		//	create document on top of import result
-		ImDocument doc = ImDocumentIO.loadDocument(docOutFolder, ProgressMonitor.dummy);
+		ImDocument doc = ImDocumentIO.loadDocument(docOutFolder, new ProgressMonitor() {
+			public void setStep(String step) {
+				host.logInfo(step);
+			}
+			public void setInfo(String info) {
+				host.logDebug(info);
+			}
+			public void setBaseProgress(int baseProgress) {}
+			public void setMaxProgress(int maxProgress) {}
+			public void setProgress(int progress) {}
+		});
 		
 		//	hand document back to caller via idi.setDocument()
 		idi.setDocument(doc);

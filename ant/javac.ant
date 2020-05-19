@@ -29,10 +29,12 @@
     		<include name="**/goldenGateServer/ime/*.java" />
     		<include name="**/goldenGateServer/ime/data/*.java" />
     		<include name="**/goldenGateServer/imi/*.java" />
+    		<include name="**/goldenGateServer/imi/importers/*.java" />
     		<include name="**/goldenGateServer/imp/*.java" />
     		<include name="**/goldenGateServer/imp/slave/*.java" />
     		<include name="**/goldenGateServer/imr/*.java" />
     		<include name="**/goldenGateServer/ims/*.java" />
+    		<include name="**/goldenGateServer/ims/connectors/*.java" />
     		<include name="**/goldenGateServer/ims/data/*.java" />
     		<include name="**/goldenGateServer/ims/util/*.java" />
 	        <classpath refid="compile.classpath" />

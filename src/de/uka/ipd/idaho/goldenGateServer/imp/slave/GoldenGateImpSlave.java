@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -27,26 +27,28 @@
  */
 package de.uka.ipd.idaho.goldenGateServer.imp.slave;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.PrintStream;
-import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
 import de.uka.ipd.idaho.easyIO.settings.Settings;
 import de.uka.ipd.idaho.gamta.util.ParallelJobRunner;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.imaging.DocumentStyle;
 import de.uka.ipd.idaho.goldenGate.GoldenGateConfiguration;
-import de.uka.ipd.idaho.goldenGate.GoldenGateConfiguration.ConfigurationDescriptor;
 import de.uka.ipd.idaho.goldenGate.configuration.ConfigurationUtils;
-import de.uka.ipd.idaho.goldenGate.configuration.FileConfiguration;
-import de.uka.ipd.idaho.goldenGate.configuration.UrlConfiguration;
 import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.imagine.GoldenGateImagine;
 import de.uka.ipd.idaho.im.imagine.GoldenGateImagineConstants;
 import de.uka.ipd.idaho.im.imagine.plugins.ImageMarkupToolProvider;
-import de.uka.ipd.idaho.im.util.ImDocumentData;
 import de.uka.ipd.idaho.im.util.ImDocumentData.FolderImDocumentData;
 import de.uka.ipd.idaho.im.util.ImDocumentIO;
 import de.uka.ipd.idaho.im.util.ImDocumentMarkupPanel.ImageMarkupTool;
@@ -67,6 +69,7 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 	private static final String LIST_TOOLS_SEQUENCE_NAME = "LISTTOOLS";
 	private static final String WAIVE_DOCUMENT_SYTLE_PARAMETER = "WAIVEDS";
 	private static final String VERBOSE_PARAMETER = "VERBOSE";
+	private static final String MAX_CORES_PARAMETER = "MAXCORES";
 	private static final String USE_SINGLE_CORE_PARAMETER = "SINGLECORE";
 	
 	/**	the main method to run GoldenGATE Imagine as a batch application
@@ -82,6 +85,7 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 		String imtNameString = null;
 		boolean requireDocStyle = true;
 		boolean silenceSystemOut = true;
+		int maxCpuCores = -1;
 		boolean useSingleCpuCore = false;
 		
 		//	parse remaining args
@@ -104,6 +108,9 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 				silenceSystemOut = false;
 			else if (USE_SINGLE_CORE_PARAMETER.equals(args[a]))
 				useSingleCpuCore = true;
+			else if (args[a].startsWith(MAX_CORES_PARAMETER + "=")) try {
+				maxCpuCores = Integer.parseInt(args[a].substring((MAX_CORES_PARAMETER + "=").length()).trim());
+			} catch (RuntimeException re) {}
 		}
 		
 		//	remember program base path
@@ -145,25 +152,15 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 		}
 		String[] imtNames = imtNameString.split("\\+");
 		
-		//	select new configuration
-		ConfigurationDescriptor configuration = getConfiguration(basePath, ggiConfigHost, ggiConfigName);
+		//	get GoldenGATE Imagine configuration
+		GoldenGateConfiguration ggiConfig = ConfigurationUtils.getConfiguration(ggiConfigName, null, ggiConfigHost, basePath);
 		
-		//	check if cancelled
-		if (configuration == null) {
+		//	check if configuration found
+		if (ggiConfig == null) {
 			sysOut.println("Configuration '" + ggiConfigName + "' not found, check parameter " + CONFIG_NAME_PARAMETER);
 			System.exit(0);
 			return;
 		}
-		
-		//	open GoldenGATE Imagine window
-		GoldenGateConfiguration ggiConfig = null;
-		
-		//	local configuration selected
-		if (configuration.host == null)
-			ggiConfig = new FileConfiguration(configuration.name, new File(new File(basePath, CONFIG_FOLDER_NAME), configuration.name), false, true, null);
-		
-		//	remote configuration selected
-		else ggiConfig = new UrlConfiguration((configuration.host + (configuration.host.endsWith("/") ? "" : "/") + configuration.name), configuration.name);
 		
 		//	if cache path set, add settings for page image and supplement cache
 		if (cacheRootPath != null) {
@@ -189,6 +186,8 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 				if (imtpName == null)
 					continue;
 				String[] pImtNames = imtps[p].getToolsMenuItemNames();
+				if(pImtNames == null)
+					continue;
 				if(pImtNames.length == 0)
 					continue;
 				sysOut.println("MTP:" + imtpName + " (" + pImtNames.length + "):");
@@ -209,16 +208,64 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 			else sysOut.println("Image Markup Tool '" + imtNames[t] + "' loaded");
 		}
 		
-		//	switch parallel jobs to linear execution if requested to
+		//	switch parallel jobs to linear or limited parallel execution if requested to
+		if (maxCpuCores == 1)
+			useSingleCpuCore = true;
 		if (useSingleCpuCore)
 			ParallelJobRunner.setLinear(true);
+		else if (1 < maxCpuCores)
+			ParallelJobRunner.setMaxCores(maxCpuCores);
+		
+		//	load document from folder
+		File docFolder = new File(docRootPath);
+		final SlaveImDocumentData docData = new SlaveImDocumentData(docFolder, sysOut);
+		
+		//	listen on system in for commands in dedicated thread
+		final Thread mainThread = Thread.currentThread();
+		final BufferedReader fromMaster = new BufferedReader(new InputStreamReader(System.in));
+		new Thread() {
+			public void run() {
+				try {
+					for (String inLine; (inLine = fromMaster.readLine()) != null;) {
+						if (inLine.startsWith("DEC:")) {
+							String docEntryName = inLine.substring("DEC:".length());
+							docData.notifyEntryRequestComplete(docEntryName);
+						}
+						else if (inLine.startsWith("DEN:")) {
+							String docEntryName = inLine.substring("DEN:".length());
+							docData.notifyEntryRequestError(docEntryName, docEntryName);
+						}
+						else if (inLine.startsWith("DEE:")) {
+							inLine = inLine.substring("DEE:".length());
+							String docEntryName;
+							String docEntryError;
+							if (inLine.indexOf('\t') == -1) {
+								docEntryName = inLine;
+								docEntryError = inLine;
+							}
+							else {
+								docEntryName = inLine.substring(0, inLine.indexOf('\t'));
+								docEntryError = inLine.substring(inLine.indexOf('\t') + "\t".length());
+							}
+							docData.notifyEntryRequestError(docEntryName, docEntryError);
+						}
+						else if (inLine.equals("DSS:")) {
+							StackTraceElement[] stes = mainThread.getStackTrace();
+							for (int e = 0; e < stes.length; e++)
+								sysOut.println("SST:  at " + stes[e].toString());
+							sysOut.println("SSC:");
+						}
+						else sysOut.println(inLine);
+					}
+				}
+				catch (Exception e) {
+					sysOut.println(e.getMessage());
+				}
+			}
+		}.start();
 		
 		//	process document
 		try {
-			
-			//	load document from folder
-			File docFolder = new File(docRootPath);
-			ImDocumentData docData = new FolderImDocumentData(docFolder, null);
 			ImDocument doc = ImDocumentIO.loadDocument(docData, pm);
 			goldenGateImagine.notifyDocumentOpened(doc, docFolder, pm);
 			
@@ -233,7 +280,7 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 			
 			//	process document
 			for (int t = 0; t < imts.length; t++) {
-				sysOut.println("Running Image Markup Tool '" + imts[t].getLabel() + "'");
+				sysOut.println("PR:" + imts[t].getLabel());
 				imts[t].process(doc, null, null, pm);
 			}
 			
@@ -242,6 +289,7 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 			ImDocumentIO.storeDocument(doc, docData, pm);
 			goldenGateImagine.notifyDocumentSaved(doc, docFolder, pm);
 			goldenGateImagine.notifyDocumentClosed(doc.docId);
+			doc.dispose();
 		}
 		
 		//	catch and log whatever might go wrong
@@ -254,44 +302,64 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 		System.exit(0);
 	}
 	
-	private static ConfigurationDescriptor getConfiguration(File dataBasePath, String configHost, String configName) {
-		
-		//	get available configurations
-		ConfigurationDescriptor[] configurations = getConfigurations(dataBasePath, configHost);
-		
-		//	get selected configuration, doing update if required
-		return ConfigurationUtils.getConfiguration(configurations, configName, dataBasePath, false, false);
-	}
-	
-	private static ConfigurationDescriptor[] getConfigurations(File dataBasePath, String configHost) {
-		
-		//	collect configurations
-		final ArrayList configList = new ArrayList();
-		
-		//	load local non-default configurations
-		ConfigurationDescriptor[] configs = ConfigurationUtils.getLocalConfigurations(dataBasePath);
-		for (int c = 0; c < configs.length; c++) {
-			if (configs[c].name.endsWith(".imagine"))
-				configList.add(configs[c]);
+	private static class SlaveImDocumentData extends FolderImDocumentData {
+		private PrintStream sysOut;
+		SlaveImDocumentData(File docFolder, PrintStream sysOut) throws IOException {
+			super(docFolder, null);
+			this.sysOut = sysOut;
 		}
-		
-		//	get downloaded zip files
-		configs = ConfigurationUtils.getZipConfigurations(dataBasePath);
-		for (int c = 0; c < configs.length; c++) {
-			if (configs[c].name.endsWith(".imagine"))
-				configList.add(configs[c]);
+		public InputStream getInputStream(String entryName) throws IOException {
+			ImDocumentEntry entry = this.getEntry(entryName);
+			if (entry == null)
+				throw new FileNotFoundException(entryName);
+			if (this.hasEntryData(entry))
+				return super.getInputStream(entryName);
+			return this.sendEntryRequest(entryName).getInputStreamWhenComplete();
 		}
-		
-		//	get remote configurations
-		if (configHost != null) {
-			configs = ConfigurationUtils.getRemoteConfigurations(configHost);
-			for (int c = 0; c < configs.length; c++) {
-				if (configs[c].name.endsWith(".imagine"))
-					configList.add(configs[c]);
+		private Map entryRequestsByName = Collections.synchronizedMap(new HashMap());
+		synchronized ImDocumentEntryRequest sendEntryRequest(String entryName) {
+			ImDocumentEntryRequest der = ((ImDocumentEntryRequest) this.entryRequestsByName.get(entryName));
+			if (der == null) {
+				der = new ImDocumentEntryRequest(entryName);
+				this.entryRequestsByName.put(entryName, der);
+			}
+			return der;
+		}
+		void notifyEntryRequestComplete(String entryName) {
+			ImDocumentEntryRequest der = ((ImDocumentEntryRequest) this.entryRequestsByName.remove(entryName));
+			if (der != null)
+				der.notifyComplete();
+		}
+		void notifyEntryRequestError(String entryName, String error) {
+			ImDocumentEntryRequest der = ((ImDocumentEntryRequest) this.entryRequestsByName.remove(entryName));
+			if (der != null)
+				der.notifyError(error);
+		}
+		private class ImDocumentEntryRequest {
+			private String entryName;
+			private String error;
+			ImDocumentEntryRequest(String entryName) {
+				this.entryName = entryName;
+			}
+			synchronized InputStream getInputStreamWhenComplete() throws IOException {
+				sysOut.println("DER:" + this.entryName);
+				while (true) try {
+					this.wait();
+					break;
+				} catch (InterruptedException ie) {}
+				if (this.error == null)
+					return getInputStream(this.entryName);
+				else if (this.error.equals(this.entryName))
+					throw new FileNotFoundException(this.entryName);
+				else throw new IOException(this.error);
+			}
+			synchronized void notifyComplete() {
+				this.notifyAll();
+			}
+			synchronized void notifyError(String error) {
+				this.error = error;
+				this.notifyAll();
 			}
 		}
-		
-		//	finally ...
-		return ((ConfigurationDescriptor[]) configList.toArray(new ConfigurationDescriptor[configList.size()]));
 	}
 }

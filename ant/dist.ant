@@ -7,7 +7,7 @@
 <project name="dist">
 	<target name="zips" depends="backenddocszip,imsdociojar,imecltjar" />
 	
-	<target name="backenddocszip" depends="imsjar,imrjar,imejar,imijar,imipdfjar,imipdfslavejar,impjar,impslavejar">
+	<target name="backenddocszip" depends="imsjar,elsimsjar,imrjar,imejar,imijar,imipdfjar,imipdfslavejar,impjar,impslavejar,imejar,imecltjar">
 		<delete file="${pack.serverim}"/>
 		<zip destfile="${pack.serverim}">
 			<fileset dir="${dist.home}" includes="Components/**/**" />
@@ -27,6 +27,18 @@
 				<include name="**/goldenGateServer/ims/*.java" />
 				<include name="**/goldenGateServer/ims/data/*.java" />
 				<include name="**/goldenGateServer/ims/util/*.java" />
+			</fileset>
+			<fileset dir="." includes="LICENSE.txt"/>
+		</jar>
+	</target>
+	<target name="elsimsjar">
+		<delete file="${jar.elsims}" />
+		<jar destfile="${jar.elsims}" manifest="${file.home}/MANIFEST.components.MF">
+			<fileset dir="${build.home}/classes">
+				<include name="**/goldenGateServer/ims/connectors/GoldenGateElsImsWriter*.class" />
+			</fileset>
+			<fileset dir="${src.home}">
+				<include name="**/goldenGateServer/ims/connectors/GoldenGateElsImsWriter.java" />
 			</fileset>
 			<fileset dir="." includes="LICENSE.txt"/>
 		</jar>
@@ -88,26 +100,19 @@
 		</jar>
 	</target>
 	
-	<target name="imecltjar" depends="check-ggi" if="${ggi.exists}">
+	<target name="check-ggiqc" unless="ggiqc.exists">
+		<available property="ggiqc.exists" file="lib/GgImagineQcTool.jar"/>
+	</target>
+	<target name="imecltjar" depends="check-ggiqc" if="${ggiqc.exists}">
 		<delete file="${jar.imeclt}" />
 		<jar destfile="${jar.imeclt}" manifest="${file.home}/MANIFEST.components.MF">
 			<fileset dir="${build.home}/classes">
 				<include name="**/goldenGateServer/ime/GoldenGateImeConstants*.class" />
-				<include name="**/goldenGateServer/ime/client/GoldenGateImeClient*.class" />
-				<include name="**/goldenGateServer/ime/data/*.class" />
-				<include name="**/goldenGateServer/ims/GoldenGateImsConstants*.class" />
-				<include name="**/goldenGateServer/ims/client/GoldenGateImsClient*.class" />
-				<include name="**/goldenGateServer/ims/client/GoldenGateImsDocumentIO*.class" />
-				<include name="**/goldenGateServer/ims/data/*.class" />
+				<include name="**/goldenGateServer/ime/client/*.class" />
 			</fileset>
 			<fileset dir="${src.home}">
 				<include name="**/goldenGateServer/ime/GoldenGateImeConstants.java" />
-				<include name="**/goldenGateServer/ime/client/GoldenGateImeClient.java" />
-				<include name="**/goldenGateServer/ime/data/*.java" />
-				<include name="**/goldenGateServer/ims/GoldenGateImsConstants.java" />
-				<include name="**/goldenGateServer/ims/client/GoldenGateImsClient.java" />
-				<include name="**/goldenGateServer/ims/client/GoldenGateImsDocumentIO.java" />
-				<include name="**/goldenGateServer/ims/data/*.java" />
+				<include name="**/goldenGateServer/ime/client/*.java" />
 			</fileset>
 			<fileset dir="." includes="LICENSE.txt"/>
 		</jar>

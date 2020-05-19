@@ -10,11 +10,11 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the Universität Karlsruhe (TH) / KIT nor the
+ *     * Neither the name of the Universitaet Karlsruhe (TH) / KIT nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY UNIVERSITÄT KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
+ * THIS SOFTWARE IS PROVIDED BY UNIVERSITAET KARLSRUHE (TH) / KIT AND CONTRIBUTORS 
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
  * ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
@@ -31,8 +31,8 @@ import java.io.File;
 import java.io.IOException;
 
 import de.uka.ipd.idaho.gamta.util.constants.LiteratureConstants;
+import de.uka.ipd.idaho.gamta.util.transfer.DocumentListBuffer;
 import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateIMS;
-import de.uka.ipd.idaho.goldenGateServer.ims.data.ImsDocumentListBuffer;
 import de.uka.ipd.idaho.goldenGateServer.util.AsynchronousConsoleAction;
 import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.stringUtils.csvHandler.StringTupel;
@@ -77,7 +77,7 @@ public abstract class AsynchronousImsAction extends AsynchronousConsoleAction im
 	protected void performAction(String[] arguments) throws Exception {
 		
 		//	get document list
-		ImsDocumentListBuffer dlb = new ImsDocumentListBuffer(this.ims.getDocumentListFull());
+		DocumentListBuffer dlb = new DocumentListBuffer(this.ims.getDocumentListFull());
 		
 		//	notify loop round end (this is fine, as loading the document list might already have been considerable effort)
 		this.enteringMainLoop("0 of " + dlb.size() + " documents done");
@@ -114,7 +114,7 @@ public abstract class AsynchronousImsAction extends AsynchronousConsoleAction im
 	protected abstract void update(StringTupel docData, String[] arguments) throws IOException;
 	
 	/**
-	 * Retrieve an actual document from the wrapped GoldenGATE IMS.
+	 * Retrieve an actual document from the backing GoldenGATE IMS.
 	 * @param docId the ID of the document to retrieve
 	 * @return the document with the specified ID
 	 * @throws IOException

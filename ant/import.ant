@@ -5,7 +5,7 @@
 -->
 
 <project name="import">
-	<target name="fetch" depends="fetch-su,fetch-hxu,fetch-gamta,fetch-eio,fetch-iclibs,fetch-ie,fetch-im,fetch-gg,fetch-ggs,fetch-ggi" />
+	<target name="fetch" depends="fetch-su,fetch-hxu,fetch-gamta,fetch-eio,fetch-iclibs,fetch-ie,fetch-im,fetch-gg,fetch-ggs,fetch-ggi,fetch-ggiqc" />
 	
 	
 	<target name="check-fetch-su" unless="su.exists">
@@ -43,6 +43,7 @@
     	<copy file="../idaho-imagemarkup/dist/ImageMarkup.jar" todir="${lib.home}" overwrite="true" verbose="false" />
     	<copy file="../idaho-imagemarkup/dist/ImageMarkup.bin.jar" todir="${lib.home}" overwrite="true" verbose="false" />
 		<copy file="../idaho-imagemarkup/dist/ImageMarkupOCR.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+		<copy file="../idaho-imagemarkup/dist/ImageMarkupPDF.jar" todir="${lib.home}" overwrite="true" verbose="false" />
 	</target>
 	
 	<target name="check-fetch-ie" unless="ie.exists">
@@ -51,7 +52,6 @@
 	<target name="fetch-ie" depends="check-fetch-ie" if="${ie.exists}">
     	<copy file="../idaho-extensions/dist/GamtaImagingAPI.jar" todir="${lib.home}" overwrite="true" verbose="false" />
     	<copy file="../idaho-extensions/dist/GamtaFeedbackAPI.jar" todir="${lib.home}" overwrite="true" verbose="false" />
-	   	<!--copy file="../idaho-extensions/dist/DocumentErrorLogging.jar" todir="${lib.home}" overwrite="true" verbose="false" /-->
 	</target>
 	
 	<target name="check-fetch-gg" unless="gg.exists">
@@ -69,6 +69,7 @@
     	<copy file="../goldengate-server/dist/Components/GgServerAEP.jar" todir="${lib.home}" overwrite="true" verbose="false" />
     	<copy file="../goldengate-server/dist/Components/GgServerRES.jar" todir="${lib.home}" overwrite="true" verbose="false" />
        	<copy file="../goldengate-server/dist/Components/GgServerUAA.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+       	<copy file="../goldengate-server/dist/Components/GgServerELS.jar" todir="${lib.home}" overwrite="true" verbose="false" />
 	</target>
 	
 	<target name="check-fetch-ggi" unless="ggi.exists">
@@ -76,6 +77,13 @@
 	</target>
 	<target name="fetch-ggi" depends="check-fetch-ggi" if="${ggi.exists}">
     	<copy file="../goldengate-imagine/dist/GgImagine.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+	</target>
+	
+	<target name="check-fetch-ggiqc" unless="ggiqc.exists">
+		<available property="ggiqc.exists" file="../goldengate-qualitycontrol/dist/GgImagineQcTool.jar"/>
+	</target>
+	<target name="fetch-ggiqc" depends="check-fetch-ggiqc" if="${ggiqc.exists}">
+    	<copy file="../goldengate-qualitycontrol/dist/GgImagineQcTool.jar" todir="${lib.home}" overwrite="true" verbose="false" />
 	</target>
 	
 	<target name="check-fetch-iclibs" unless="iclibs.exists">
