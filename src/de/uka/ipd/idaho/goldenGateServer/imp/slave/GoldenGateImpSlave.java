@@ -27,24 +27,27 @@
  */
 package de.uka.ipd.idaho.goldenGateServer.imp.slave;
 
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.io.PrintStream;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
+import java.util.Properties;
+import java.util.TreeSet;
 
 import de.uka.ipd.idaho.easyIO.settings.Settings;
-import de.uka.ipd.idaho.gamta.util.ParallelJobRunner;
+import de.uka.ipd.idaho.gamta.util.DocumentStyle;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
-import de.uka.ipd.idaho.gamta.util.imaging.DocumentStyle;
 import de.uka.ipd.idaho.goldenGate.GoldenGateConfiguration;
 import de.uka.ipd.idaho.goldenGate.configuration.ConfigurationUtils;
+import de.uka.ipd.idaho.goldenGate.plugins.GoldenGatePlugin;
+import de.uka.ipd.idaho.goldenGateServer.util.masterSlave.MasterProcessInterface;
+import de.uka.ipd.idaho.goldenGateServer.util.masterSlave.SlaveConstants;
+import de.uka.ipd.idaho.goldenGateServer.util.masterSlave.SlaveRuntimeUtils;
 import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.imagine.GoldenGateImagine;
 import de.uka.ipd.idaho.im.imagine.GoldenGateImagineConstants;
@@ -60,109 +63,95 @@ import de.uka.ipd.idaho.im.util.ImDocumentMarkupPanel.ImageMarkupTool;
  * 
  * @author sautter
  */
-public class GoldenGateImpSlave implements GoldenGateImagineConstants {
-	private static final String CACHE_PATH_PARAMETER = "CACHE";
-	private static final String DATA_PATH_PARAMETER = "DATA";
+public class GoldenGateImpSlave implements GoldenGateImagineConstants, SlaveConstants {
 	private static final String CONFIG_HOST_PARAMETER = "CONFHOST";
 	private static final String CONFIG_NAME_PARAMETER = "CONFNAME";
 	private static final String TOOL_SEQUENCE_PARAMETER = "TOOLS";
 	private static final String LIST_TOOLS_SEQUENCE_NAME = "LISTTOOLS";
-	private static final String WAIVE_DOCUMENT_SYTLE_PARAMETER = "WAIVEDS";
-	private static final String VERBOSE_PARAMETER = "VERBOSE";
-	private static final String MAX_CORES_PARAMETER = "MAXCORES";
-	private static final String USE_SINGLE_CORE_PARAMETER = "SINGLECORE";
+//	private static final String WAIVE_DOCUMENT_SYTLE_PARAMETER = "WAIVEDS";
+	private static final String DOCUMENT_SYTLE_MODE_PARAMETER = "DSMODE";
 	
 	/**	the main method to run GoldenGATE Imagine as a batch application
 	 */
 	public static void main(String[] args) throws Exception {
+//		
+//		//	adjust basic parameters
+//		String basePathStr = ".";
+//		String cacheRootPath = null;
+//		String docRootPath = null;
+//		String logRootPath = null;
+//		String ggiConfigHost = null;
+//		String ggiConfigName = null;
+//		String imtNameString = null;
+//		boolean requireDocStyle = true;
+//		boolean forkSystemOut = false;
+//		int maxCpuCores = -1;
+//		boolean useSingleCpuCore = false;
+//		
+//		//	parse remaining args
+//		for (int a = 0; a < args.length; a++) {
+//			if (args[a] == null)
+//				continue;
+//			if (args[a].startsWith(CACHE_PATH_PARAMETER + "="))
+//				cacheRootPath = args[a].substring((CACHE_PATH_PARAMETER + "=").length());
+//			else if (args[a].startsWith(DATA_PATH_PARAMETER + "="))
+//				docRootPath = args[a].substring((DATA_PATH_PARAMETER + "=").length());
+//			else if (args[a].startsWith(LOG_PATH_PARAMETER + "="))
+//				logRootPath = args[a].substring((LOG_PATH_PARAMETER + "=").length());
+//			else if (args[a].startsWith(CONFIG_HOST_PARAMETER + "="))
+//				ggiConfigHost = args[a].substring((CONFIG_HOST_PARAMETER + "=").length());
+//			else if (args[a].startsWith(CONFIG_NAME_PARAMETER + "="))
+//				ggiConfigName = args[a].substring((CONFIG_NAME_PARAMETER + "=").length());
+//			else if (args[a].startsWith(TOOL_SEQUENCE_PARAMETER + "="))
+//				imtNameString = args[a].substring((TOOL_SEQUENCE_PARAMETER + "=").length());
+//			else if (WAIVE_DOCUMENT_SYTLE_PARAMETER.equals(args[a]))
+//				requireDocStyle = false;
+//			else if (VERBOSE_PARAMETER.equals(args[a]))
+//				forkSystemOut = true;
+//			else if (USE_SINGLE_CORE_PARAMETER.equals(args[a]))
+//				useSingleCpuCore = true;
+//			else if (args[a].startsWith(MAX_CORES_PARAMETER + "=")) try {
+//				maxCpuCores = Integer.parseInt(args[a].substring((MAX_CORES_PARAMETER + "=").length()).trim());
+//			} catch (RuntimeException re) {}
+//		}
 		
 		//	adjust basic parameters
-		String basePathStr = ".";
-		String cacheRootPath = null;
-		String docRootPath = null;
-		String ggiConfigHost = null;
-		String ggiConfigName = null;
-		String imtNameString = null;
-		boolean requireDocStyle = true;
-		boolean silenceSystemOut = true;
-		int maxCpuCores = -1;
-		boolean useSingleCpuCore = false;
+		Properties argsMap = SlaveRuntimeUtils.parseArguments(args);
 		
-		//	parse remaining args
-		for (int a = 0; a < args.length; a++) {
-			if (args[a] == null)
-				continue;
-			if (args[a].startsWith(CACHE_PATH_PARAMETER + "="))
-				cacheRootPath = args[a].substring((CACHE_PATH_PARAMETER + "=").length());
-			else if (args[a].startsWith(DATA_PATH_PARAMETER + "="))
-				docRootPath = args[a].substring((DATA_PATH_PARAMETER + "=").length());
-			else if (args[a].startsWith(CONFIG_HOST_PARAMETER + "="))
-				ggiConfigHost = args[a].substring((CONFIG_HOST_PARAMETER + "=").length());
-			else if (args[a].startsWith(CONFIG_NAME_PARAMETER + "="))
-				ggiConfigName = args[a].substring((CONFIG_NAME_PARAMETER + "=").length());
-			else if (args[a].startsWith(TOOL_SEQUENCE_PARAMETER + "="))
-				imtNameString = args[a].substring((TOOL_SEQUENCE_PARAMETER + "=").length());
-			else if (WAIVE_DOCUMENT_SYTLE_PARAMETER.equals(args[a]))
-				requireDocStyle = false;
-			else if (VERBOSE_PARAMETER.equals(args[a]))
-				silenceSystemOut = false;
-			else if (USE_SINGLE_CORE_PARAMETER.equals(args[a]))
-				useSingleCpuCore = true;
-			else if (args[a].startsWith(MAX_CORES_PARAMETER + "=")) try {
-				maxCpuCores = Integer.parseInt(args[a].substring((MAX_CORES_PARAMETER + "=").length()).trim());
-			} catch (RuntimeException re) {}
-		}
-		
-		//	remember program base path
-		File basePath = new File(basePathStr);
-		
-		//	preserve System.out and System.err
-		final PrintStream sysOut = System.out;
-		final PrintStream sysErr = System.err;
-		
-		//	set up logging
-		ProgressMonitor pm = new ProgressMonitor() {
-			public void setStep(String step) {
-				sysOut.println("S:" + step);
-			}
-			public void setInfo(String info) {
-				sysOut.println("I:" + info);
-			}
-			public void setBaseProgress(int baseProgress) {
-				sysOut.println("BP:" + baseProgress);
-			}
-			public void setMaxProgress(int maxProgress) {
-				sysOut.println("MP:" + maxProgress);
-			}
-			public void setProgress(int progress) {
-				sysOut.println("P:" + progress);
-			}
-		};
-		
-		//	silence System.out
-		if (silenceSystemOut)
-			System.setOut(new PrintStream(new OutputStream() {
-				public void write(int b) throws IOException {}
-			}));
+		//	set up communication with master (before logging tampers with output streams)
+		ImpMasterProcessInterface mpi = new ImpMasterProcessInterface();
 		
 		//	get list of image markup tools to run
+		String imtNameString = argsMap.getProperty(TOOL_SEQUENCE_PARAMETER);
 		if (imtNameString == null) {
-			sysOut.println("No Image Markup Tools configured to run, check parameter " + TOOL_SEQUENCE_PARAMETER);
+			mpi.sendError("No Image Markup Tools configured to run, check parameter " + TOOL_SEQUENCE_PARAMETER);
 			System.exit(0);
 		}
 		String[] imtNames = imtNameString.split("\\+");
 		
+		//	set up logging (if we have a folder)
+		SlaveRuntimeUtils.setUpLogFiles(argsMap, "ImpSlaveBatch");
+		
+		//	start receiving control commands from master process
+		mpi.start();
+		
+		//	remember program base path
+		File basePath = new File(".");
+		
 		//	get GoldenGATE Imagine configuration
+		String ggiConfigHost = argsMap.getProperty(CONFIG_HOST_PARAMETER);
+		String ggiConfigName = argsMap.getProperty(CONFIG_NAME_PARAMETER);
 		GoldenGateConfiguration ggiConfig = ConfigurationUtils.getConfiguration(ggiConfigName, null, ggiConfigHost, basePath);
 		
 		//	check if configuration found
 		if (ggiConfig == null) {
-			sysOut.println("Configuration '" + ggiConfigName + "' not found, check parameter " + CONFIG_NAME_PARAMETER);
-			System.exit(0);
+			mpi.sendError("Configuration '" + ggiConfigName + "' not found, check parameter " + CONFIG_NAME_PARAMETER);
+//			System.exit(0);
 			return;
 		}
 		
 		//	if cache path set, add settings for page image and supplement cache
+		String cacheRootPath = argsMap.getProperty(CACHE_PATH_PARAMETER);
 		if (cacheRootPath != null) {
 			if (!cacheRootPath.endsWith("/"))
 				cacheRootPath += "/";
@@ -174,7 +163,7 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 		
 		//	instantiate GoldenGATE Imagine
 		GoldenGateImagine goldenGateImagine = GoldenGateImagine.openGoldenGATE(ggiConfig, basePath, false);
-		sysOut.println("GoldenGATE Imagine core created, configuration is " + ggiConfigName);
+		mpi.sendResult("GoldenGATE Imagine core created, configuration is " + ggiConfigName);
 		
 		//	list markup tools
 		if (LIST_TOOLS_SEQUENCE_NAME.equals(imtNameString)) {
@@ -185,16 +174,21 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 					imtpName = imtps[p].getPluginName();
 				if (imtpName == null)
 					continue;
-				String[] pImtNames = imtps[p].getToolsMenuItemNames();
-				if(pImtNames == null)
+				TreeSet pImtNames = new TreeSet();
+				String[] pemImtNames = imtps[p].getEditMenuItemNames();
+				if(pemImtNames != null)
+					pImtNames.addAll(Arrays.asList(pemImtNames));
+				String[] ptmImtNames = imtps[p].getToolsMenuItemNames();
+				if(ptmImtNames != null)
+					pImtNames.addAll(Arrays.asList(ptmImtNames));
+				if(pImtNames.isEmpty())
 					continue;
-				if(pImtNames.length == 0)
-					continue;
-				sysOut.println("MTP:" + imtpName + " (" + pImtNames.length + "):");
-				for (int t = 0; t < pImtNames.length; t++)
-					sysOut.println("MT: - " + pImtNames[t]);
+				mpi.sendOutput("MTP:" + imtpName + " (" + pImtNames.size() + "):");
+				for (Iterator tnit = pImtNames.iterator(); tnit.hasNext();)
+					mpi.sendOutput("MT:" + tnit.next());
 			}
-			System.exit(0);
+//			System.exit(0);
+			return;
 		}
 		
 		//	get individual image markup tools
@@ -202,67 +196,23 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 		for (int t = 0; t < imtNames.length; t++) {
 			imts[t] = goldenGateImagine.getImageMarkupToolForName(imtNames[t]);
 			if (imts[t] == null) {
-				sysOut.println("Image Markup Tool '" + imtNames[t] + "' not found, check parameter " + TOOL_SEQUENCE_PARAMETER);
-				System.exit(0);
+				mpi.sendError("Image Markup Tool '" + imtNames[t] + "' not found, check parameter " + TOOL_SEQUENCE_PARAMETER);
+//				System.exit(0);
+				return;
 			}
-			else sysOut.println("Image Markup Tool '" + imtNames[t] + "' loaded");
+			else mpi.sendResult("Image Markup Tool '" + imtNames[t] + "' loaded");
 		}
 		
-		//	switch parallel jobs to linear or limited parallel execution if requested to
-		if (maxCpuCores == 1)
-			useSingleCpuCore = true;
-		if (useSingleCpuCore)
-			ParallelJobRunner.setLinear(true);
-		else if (1 < maxCpuCores)
-			ParallelJobRunner.setMaxCores(maxCpuCores);
+		//	impose parallel processing limitations
+		SlaveRuntimeUtils.setUpMaxCores(argsMap);
 		
 		//	load document from folder
+		String docRootPath = argsMap.getProperty(DATA_PATH_PARAMETER);
 		File docFolder = new File(docRootPath);
-		final SlaveImDocumentData docData = new SlaveImDocumentData(docFolder, sysOut);
+		SlaveImDocumentData docData = new SlaveImDocumentData(docFolder, mpi);
 		
-		//	listen on system in for commands in dedicated thread
-		final Thread mainThread = Thread.currentThread();
-		final BufferedReader fromMaster = new BufferedReader(new InputStreamReader(System.in));
-		new Thread() {
-			public void run() {
-				try {
-					for (String inLine; (inLine = fromMaster.readLine()) != null;) {
-						if (inLine.startsWith("DEC:")) {
-							String docEntryName = inLine.substring("DEC:".length());
-							docData.notifyEntryRequestComplete(docEntryName);
-						}
-						else if (inLine.startsWith("DEN:")) {
-							String docEntryName = inLine.substring("DEN:".length());
-							docData.notifyEntryRequestError(docEntryName, docEntryName);
-						}
-						else if (inLine.startsWith("DEE:")) {
-							inLine = inLine.substring("DEE:".length());
-							String docEntryName;
-							String docEntryError;
-							if (inLine.indexOf('\t') == -1) {
-								docEntryName = inLine;
-								docEntryError = inLine;
-							}
-							else {
-								docEntryName = inLine.substring(0, inLine.indexOf('\t'));
-								docEntryError = inLine.substring(inLine.indexOf('\t') + "\t".length());
-							}
-							docData.notifyEntryRequestError(docEntryName, docEntryError);
-						}
-						else if (inLine.equals("DSS:")) {
-							StackTraceElement[] stes = mainThread.getStackTrace();
-							for (int e = 0; e < stes.length; e++)
-								sysOut.println("SST:  at " + stes[e].toString());
-							sysOut.println("SSC:");
-						}
-						else sysOut.println(inLine);
-					}
-				}
-				catch (Exception e) {
-					sysOut.println(e.getMessage());
-				}
-			}
-		}.start();
+		//	create progress monitor reporting back to master
+		ProgressMonitor pm = mpi.createProgressMonitor();
 		
 		//	process document
 		try {
@@ -270,17 +220,31 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 			goldenGateImagine.notifyDocumentOpened(doc, docFolder, pm);
 			
 			//	test if document style detected
-			if (requireDocStyle) {
-				if (DocumentStyle.getStyleFor(doc) == null) {
-					sysOut.println(" - unable to assign document style");
+			String docStyleMode = argsMap.getProperty(DOCUMENT_SYTLE_MODE_PARAMETER, "R");
+			
+			//	remove at least any plug-in based providers if ignoring document style templates
+			if ("I".equals(docStyleMode)) {
+				GoldenGatePlugin[] dsps = goldenGateImagine.getImplementingPlugins(DocumentStyle.Provider.class);
+				for (int p = 0; p < dsps.length; p++)
+					DocumentStyle.removeProvider((DocumentStyle.Provider) dsps[p]);
+			}
+			
+			//	get and check document style template otherwise
+			else {
+				DocumentStyle docStyle = DocumentStyle.getStyleFor(doc);
+				if (docStyle != null)
+					mpi.sendOutput(" - assigned document style '" + ((String) doc.getAttribute(DocumentStyle.DOCUMENT_STYLE_NAME_ATTRIBUTE)) + "'");
+				else if ("U".equals(docStyleMode))
+					mpi.sendOutput(" - could not assigned document style");
+				else {
+					mpi.sendError("Unable to assign document style");
 					return;
 				}
-				else sysOut.println(" - assigned document style '" + ((String) doc.getAttribute(DocumentStyle.DOCUMENT_STYLE_NAME_ATTRIBUTE)) + "'");
 			}
 			
 			//	process document
 			for (int t = 0; t < imts.length; t++) {
-				sysOut.println("PR:" + imts[t].getLabel());
+				mpi.sendOutput("PR:" + imts[t].getLabel());
 				imts[t].process(doc, null, null, pm);
 			}
 			
@@ -294,19 +258,51 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 		
 		//	catch and log whatever might go wrong
 		catch (Throwable t) {
-			sysOut.println("Error processing document: " + t.getMessage());
-			t.printStackTrace(sysOut);
+			mpi.sendError("Error processing document: " + t.getMessage());
+			mpi.sendError(t);
 		}
-		
-		//	shut down whatever threads are left
-		System.exit(0);
+//		
+//		//	shut down whatever threads are left
+//		System.exit(0);
+	}
+	
+	private static class ImpMasterProcessInterface extends MasterProcessInterface {
+		private SlaveImDocumentData docData;
+		void setDocData(SlaveImDocumentData docData) {
+			this.docData = docData;
+		}
+		protected void handleInput(String input) {
+			if (input.startsWith("DEC:")) {
+				String docEntryName = input.substring("DEC:".length());
+				docData.notifyEntryRequestComplete(docEntryName);
+			}
+			else if (input.startsWith("DEN:")) {
+				String docEntryName = input.substring("DEN:".length());
+				docData.notifyEntryRequestError(docEntryName, docEntryName);
+			}
+			else if (input.startsWith("DEE:")) {
+				input = input.substring("DEE:".length());
+				String docEntryName;
+				String docEntryError;
+				if (input.indexOf('\t') == -1) {
+					docEntryName = input;
+					docEntryError = input;
+				}
+				else {
+					docEntryName = input.substring(0, input.indexOf('\t'));
+					docEntryError = input.substring(input.indexOf('\t') + "\t".length());
+				}
+				docData.notifyEntryRequestError(docEntryName, docEntryError);
+			}
+		}
 	}
 	
 	private static class SlaveImDocumentData extends FolderImDocumentData {
-		private PrintStream sysOut;
-		SlaveImDocumentData(File docFolder, PrintStream sysOut) throws IOException {
+		ImpMasterProcessInterface mpi;
+		SlaveImDocumentData(File docFolder, ImpMasterProcessInterface mpi) throws IOException {
 			super(docFolder, null);
-			this.sysOut = sysOut;
+			this.mpi = mpi;
+			this.mpi.setDocData(this);
 		}
 		public InputStream getInputStream(String entryName) throws IOException {
 			ImDocumentEntry entry = this.getEntry(entryName);
@@ -342,7 +338,7 @@ public class GoldenGateImpSlave implements GoldenGateImagineConstants {
 				this.entryName = entryName;
 			}
 			synchronized InputStream getInputStreamWhenComplete() throws IOException {
-				sysOut.println("DER:" + this.entryName);
+				mpi.sendOutput("DER:" + this.entryName);
 				while (true) try {
 					this.wait();
 					break;

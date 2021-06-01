@@ -51,7 +51,7 @@
 	</target>
 	<target name="fetch-ie" depends="check-fetch-ie" if="${ie.exists}">
     	<copy file="../idaho-extensions/dist/GamtaImagingAPI.jar" todir="${lib.home}" overwrite="true" verbose="false" />
-    	<copy file="../idaho-extensions/dist/GamtaFeedbackAPI.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+    	<!-- copy file="../idaho-extensions/dist/GamtaFeedbackAPI.jar" todir="${lib.home}" overwrite="true" verbose="false" / -->
 	</target>
 	
 	<target name="check-fetch-gg" unless="gg.exists">
@@ -66,6 +66,7 @@
 	</target>
 	<target name="fetch-ggs" depends="check-fetch-ggs" if="${ggs.exists}">
     	<copy file="../goldengate-server/dist/GgServer.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+		<copy file="../goldengate-server/dist/Components/Bin/GgServerSlaveUtils.jar" todir="${lib.home}" overwrite="true" verbose="false" />
     	<copy file="../goldengate-server/dist/Components/GgServerAEP.jar" todir="${lib.home}" overwrite="true" verbose="false" />
     	<copy file="../goldengate-server/dist/Components/GgServerRES.jar" todir="${lib.home}" overwrite="true" verbose="false" />
        	<copy file="../goldengate-server/dist/Components/GgServerUAA.jar" todir="${lib.home}" overwrite="true" verbose="false" />

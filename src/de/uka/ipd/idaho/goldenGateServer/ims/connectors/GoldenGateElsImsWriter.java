@@ -38,6 +38,7 @@ import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateImsConstants.ImsDocumentE
 import de.uka.ipd.idaho.im.ImAnnotation;
 import de.uka.ipd.idaho.im.ImDocument;
 import de.uka.ipd.idaho.im.ImDocument.ImDocumentListener;
+import de.uka.ipd.idaho.im.ImFont;
 import de.uka.ipd.idaho.im.ImObject;
 import de.uka.ipd.idaho.im.ImRegion;
 import de.uka.ipd.idaho.im.ImSupplement;
@@ -100,7 +101,7 @@ public class GoldenGateElsImsWriter extends LinkWriter {
 	 * @see de.uka.ipd.idaho.goldenGateServer.plazi.extLinks.GoldenGateELS.LinkWriter#canWriteLinks(java.lang.String)
 	 */
 	public boolean canWriteLinks(String dataId) {
-		return this.ims.isDocumentEditable(dataId);
+		return this.ims.isDocumentEditable(dataId, UPDATE_USER_NAME);
 	}
 	
 	/* (non-Javadoc)
@@ -142,7 +143,7 @@ public class GoldenGateElsImsWriter extends LinkWriter {
 			
 			//	store any changes
 			if (docTracker.docChanged)
-				this.ims.updateDocument(UPDATE_USER_NAME, doc, this);
+				this.ims.updateDocument(this.getUpdateUserName(), UPDATE_USER_NAME, doc, this);
 			doc.dispose();
 			
 			//	return whatever is left
@@ -175,6 +176,9 @@ public class GoldenGateElsImsWriter extends LinkWriter {
 			this.docChanged = true;
 		}
 		public void supplementChanged(String supplementId, ImSupplement oldValue) {
+			this.docChanged = true;
+		}
+		public void fontChanged(String fontName, ImFont oldValue) {
 			this.docChanged = true;
 		}
 		public void regionRemoved(ImRegion region) {

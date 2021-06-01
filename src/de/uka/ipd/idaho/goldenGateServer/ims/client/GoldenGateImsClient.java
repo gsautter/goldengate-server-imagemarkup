@@ -888,29 +888,6 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 		return docData;
 	}
 	
-//	/**
-//	 * Obtain an input stream fetching an individual document entry from the
-//	 * backing IMS. If there are multiple entries to fetch, it is far more
-//	 * efficient to use the <code>getDocumentEntries()</code> method.
-//	 * @param docId the ID of the document the entry belongs to
-//	 * @param entry the entry to fetch the data for
-//	 * @return an input stream to read the entry data from
-//	 * @throws IOException
-//	 */
-//	private InputStream getDocumentEntry(String docId, ImDocumentEntry entry) throws IOException {
-//		return this.getDocumentEntry(docId, entry, null);
-//	}
-//	
-//	/**
-//	 * Obtain an input stream fetching an individual document entry from the
-//	 * backing IMS. If there are multiple entries to fetch, it is far more
-//	 * efficient to use the <code>getDocumentEntries()</code> method.
-//	 * @param docId the ID of the document the entry belongs to
-//	 * @param entry the entry to fetch the data for
-//	 * @param docData the document data object to store the entry data in
-//	 * @return an input stream to read the entry data from
-//	 * @throws IOException
-//	 */
 	void getDocumentEntry(String docId, ImDocumentEntry entry, ImDocumentData docData) throws IOException {
 		this.getDocumentEntries(docId, Collections.singletonList(entry), docData, null);
 	}
@@ -1030,51 +1007,6 @@ public class GoldenGateImsClient implements GoldenGateImsConstants {
 				Thread.sleep(1000);
 			} catch (InterruptedException ie) {}
 		}
-//		try {
-//			con = this.authClient.getConnection();
-//			BufferedWriter bw = con.getWriter();
-//			bw.write(GET_DOCUMENT_ENTRIES);
-//			bw.newLine();
-//			bw.write(this.authClient.getSessionID());
-//			bw.newLine();
-//			bw.write(docId);
-//			bw.newLine();
-//			for (int e = 0; e < entries.length; e++) {
-//				bw.write(entries[e].toTabString());
-//				bw.newLine();
-//			}
-//			bw.newLine();
-//			bw.flush();
-//			
-//			BufferedLineInputStream blis = con.getInputStream();
-//			String error = blis.readLine();
-//			if (!GET_DOCUMENT_ENTRIES.equals(error))
-//				throw new IOException(error);
-//			
-//			ZipInputStream zin = new ZipInputStream(blis);
-//			int zeCount = 0;
-//			byte[] buffer = new byte[1024];
-//			for (ZipEntry ze; (ze = zin.getNextEntry()) != null;) {
-//				zeCount++;
-//				ImDocumentEntry docEntry = new ImDocumentEntry(ze);
-//				if (pm != null) {
-//					pm.setInfo(" - " + docEntry.name);
-//					pm.setProgress((zeCount * 100) / entries.length);
-//				}
-//				OutputStream cacheOut = docData.getOutputStream(docEntry, true);
-//				for (int r; (r = zin.read(buffer, 0, buffer.length)) != -1;)
-//					cacheOut.write(buffer, 0, r);
-//				cacheOut.flush();
-//				cacheOut.close();
-//			}
-//			if (pm != null)
-//				pm.setProgress(100);
-//		}
-//		finally {
-//			if (con != null)
-//				con.close();
-//			con = null;
-//		}
 	}
 	
 	/**

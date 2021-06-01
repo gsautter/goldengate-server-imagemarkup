@@ -29,6 +29,7 @@ package de.uka.ipd.idaho.goldenGateServer.imi;
 
 import java.io.File;
 
+import de.uka.ipd.idaho.goldenGateServer.GoldenGateServerComponent.ComponentActionConsole;
 import de.uka.ipd.idaho.goldenGateServer.GoldenGateServerComponentHost;
 import de.uka.ipd.idaho.goldenGateServer.imi.GoldenGateIMI.ImiDocumentImport;
 
@@ -75,6 +76,15 @@ public abstract class ImiDocumentImporter {
 	 * @return the importer name
 	 */
 	public abstract String getName();
+	
+	/**
+	 * Get the description of the importer. The array returned by this method
+	 * should contain at least one element, comprising the name of the importer
+	 * and MIME types it handles. Further lines should explain any parameters
+	 * the importer extracts from specified import attributes.
+	 * @return the importer description
+	 */
+	public abstract String[] getDescription();
 	
 	/**
 	 * Get the priority of the importer, on a 0-10 scale. Higher priority
@@ -173,4 +183,14 @@ public abstract class ImiDocumentImporter {
 	 * @param idi the import to handle
 	 */
 	public abstract void handleImport(ImiDocumentImport idi);
+	
+	/**
+	 * Retrieve an array of console actions to interact with the importer via
+	 * the GoldenGATE Server console. This default implementation returns null,
+	 * subclasses are welcome to overwrite it as needed.
+	 * @return an array holding the actions
+	 */
+	public ComponentActionConsole[] getActions() {
+		return null;
+	}
 }

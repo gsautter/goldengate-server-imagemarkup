@@ -216,7 +216,11 @@ public class ImeQcToolDataBaseProvider extends GgImagineQcToolDataBaseProvider i
 					return supplementFetchMode;
 				else if (entry.name.startsWith(ImSupplement.FIGURE_TYPE + "@"))
 					return supplementFetchMode;
+				else if (entry.name.matches(ImSupplement.FIGURE_TYPE + "\\-[0-9]+" + "\\@.*"))
+					return supplementFetchMode;
 				else if (entry.name.startsWith(ImSupplement.SCAN_TYPE + "@"))
+					return supplementFetchMode;
+				else if (entry.name.matches(ImSupplement.SCAN_TYPE + "\\-[0-9]+" + "\\@.*"))
 					return supplementFetchMode;
 				else if (entry.name.startsWith("page") && entry.name.endsWith(".png")) {
 					String pidStr = entry.name;

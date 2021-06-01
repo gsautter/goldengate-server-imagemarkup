@@ -236,54 +236,54 @@ Build GoldenGateIME (Image Markup Error Handler):
 			}
 		};
 		cal.add(ca);
-		
-		//	list documents with errors
-		ca = new ComponentActionNetwork() {
-			public String getActionCommand() {
-				return GET_DOCUMENT_LIST_SHARED;
-			}
-			public void performActionNetwork(BufferedReader input, BufferedWriter output) throws IOException {
-				
-				// check authentication
-				String sessionId = input.readLine();
-				if (!uaa.isValidSession(sessionId)) {
-					output.write("Invalid session (" + sessionId + ")");
-					output.newLine();
-					return;
-				}
-				
-				//	read filter string
-				String filterString = input.readLine();
-				Properties filter;
-				if (filterString.length() == 0)
-					filter = null;
-				else {
-					String[] filters = filterString.split("\\&");
-					filter = new Properties();
-					for (int f = 0; f < filters.length; f++) {
-						String[] pair = filters[f].split("\\=");
-						if (pair.length == 2) {
-							String name = pair[0].trim();
-							String value = URLDecoder.decode(pair[1].trim(), ENCODING).trim();
-							
-							String existingValue = filter.getProperty(name);
-							if (existingValue != null)
-								value = existingValue + "\n" + value;
-							
-							filter.setProperty(name, value);
-						}
-					}
-				}
-				
-				//	send document list
-				ImsDocumentList docList = getDocumentList(uaa.getUserNameForSession(sessionId), filter);
-				output.write(GET_DOCUMENT_LIST_SHARED);
-				output.newLine();
-				docList.writeData(output);
-				output.newLine();
-			}
-		};
-		cal.add(ca);
+//		
+//		//	list documents with errors
+//		ca = new ComponentActionNetwork() {
+//			public String getActionCommand() {
+//				return GET_DOCUMENT_LIST_SHARED;
+//			}
+//			public void performActionNetwork(BufferedReader input, BufferedWriter output) throws IOException {
+//				
+//				// check authentication
+//				String sessionId = input.readLine();
+//				if (!uaa.isValidSession(sessionId)) {
+//					output.write("Invalid session (" + sessionId + ")");
+//					output.newLine();
+//					return;
+//				}
+//				
+//				//	read filter string
+//				String filterString = input.readLine();
+//				Properties filter;
+//				if (filterString.length() == 0)
+//					filter = null;
+//				else {
+//					String[] filters = filterString.split("\\&");
+//					filter = new Properties();
+//					for (int f = 0; f < filters.length; f++) {
+//						String[] pair = filters[f].split("\\=");
+//						if (pair.length == 2) {
+//							String name = pair[0].trim();
+//							String value = URLDecoder.decode(pair[1].trim(), ENCODING).trim();
+//							
+//							String existingValue = filter.getProperty(name);
+//							if (existingValue != null)
+//								value = existingValue + "\n" + value;
+//							
+//							filter.setProperty(name, value);
+//						}
+//					}
+//				}
+//				
+//				//	send document list
+//				ImsDocumentList docList = getDocumentList(uaa.getUserNameForSession(sessionId), filter);
+//				output.write(GET_DOCUMENT_LIST_SHARED);
+//				output.newLine();
+//				docList.writeData(output);
+//				output.newLine();
+//			}
+//		};
+//		cal.add(ca);
 		
 		//	get error summary
 		ca = new ComponentActionNetwork() {

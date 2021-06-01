@@ -78,8 +78,8 @@ import de.uka.ipd.idaho.plugins.bibRefs.refBank.RefBankClient.BibRefIterator;
  * @author sautter
  */
 public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements BibRefConstants {
-	private static final int postUploadMaxLength = (25 * 1024 * 1024); // 25MB for starters
-	private static final int putUploadMaxLength = (100 * 1024 * 1024); // 25MB for starters
+//	private static final int defaultPostUploadMaxLength = (25 * 1024 * 1024); // 25MB for starters
+//	private static final int defaultPutUploadMaxLength = (100 * 1024 * 1024); // 100MB for starters
 	private static Set fileFieldNames = Collections.synchronizedSet(new HashSet());
 	static {
 		fileFieldNames.add("uploadDocFile");
@@ -95,6 +95,8 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 	private String putMetadataWaiverMode = Gamta.getAnnotationID(); // initialize to random value to block metadata waiver for faulty configuration
 	
 	private File uploadCacheFolder = null;
+	private int postUploadMaxLength = (25 * 1024 * 1024); // 25MB for starters
+	private int putUploadMaxLength = (100 * 1024 * 1024); // 100MB for starters
 	
 	private GoldenGateImiClient imiClient = null;
 	
@@ -128,6 +130,14 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		
 		//	read metadata check waiver from configuration
 		this.putMetadataWaiverMode = this.getSetting("putMetadataWaiverMode", this.putMetadataWaiverMode);
+		
+		//	read upload file size limits
+		try {
+			this.postUploadMaxLength = Integer.parseInt(this.getSetting("postUploadMaxLength", ("" + this.postUploadMaxLength)));
+		} catch (NumberFormatException nfe) {}
+		try {
+			this.putUploadMaxLength = Integer.parseInt(this.getSetting("putUploadMaxLength", ("" + this.putUploadMaxLength)));
+		} catch (NumberFormatException nfe) {}
 		
 		//	collect identifier types
 		String refIdTypesSetting = this.getSetting("refIdTypes", "none Generic");
@@ -374,6 +384,7 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, YEAR_ANNOTATION_TYPE, rd));
 		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, TITLE_ANNOTATION_TYPE, rd));
 		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, JOURNAL_NAME_ANNOTATION_TYPE, rd));
+		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, SERIES_IN_JOURNAL_ANNOTATION_TYPE, rd));
 		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, PUBLISHER_ANNOTATION_TYPE, rd));
 		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, LOCATION_ANNOTATION_TYPE, rd));
 		setRef = (setRef | this.writeRefDataAttributeSetter(hpb, EDITOR_ANNOTATION_TYPE, rd));
@@ -475,6 +486,9 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 	private String getOrigin(HttpServletRequest request) {
 		String origin = request.getParameter(JOURNAL_NAME_ANNOTATION_TYPE);
 		if (origin != null) {
+			String sj = request.getParameter(SERIES_IN_JOURNAL_ANNOTATION_TYPE);
+			if (sj != null)
+				origin += (" (" + sj + ")");
 			String vd = request.getParameter(VOLUME_DESIGNATOR_ANNOTATION_TYPE);
 			if (vd != null) {
 				origin += (" " + vd);
@@ -523,6 +537,7 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		this.addRefDataAttribute(rd, data, YEAR_ANNOTATION_TYPE);
 		this.addRefDataAttribute(rd, data, TITLE_ANNOTATION_TYPE);
 		this.addRefDataAttribute(rd, data, JOURNAL_NAME_ANNOTATION_TYPE);
+		this.addRefDataAttribute(rd, data, SERIES_IN_JOURNAL_ANNOTATION_TYPE);
 		this.addRefDataAttribute(rd, data, PUBLISHER_ANNOTATION_TYPE);
 		this.addRefDataAttribute(rd, data, LOCATION_ANNOTATION_TYPE);
 		this.addRefDataAttribute(rd, data, JOURNAL_NAME_OR_PUBLISHER_ANNOTATION_TYPE);
@@ -584,7 +599,7 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		}
 		
 		//	receive upload
-		FormDataReceiver data = FormDataReceiver.receive(request, postUploadMaxLength, this.uploadCacheFolder, 1024, fileFieldNames);
+		FormDataReceiver data = FormDataReceiver.receive(request, this.postUploadMaxLength, this.uploadCacheFolder, 1024, fileFieldNames);
 		
 		//	get user name to credit
 		String mimeType = data.getFieldValue("uploadDocMimeType");
@@ -693,7 +708,7 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		String metaDataMode = request.getHeader("Meta-Data-Mode");
 		
 		//	receive upload
-		FormDataReceiver data = FormDataReceiver.receive(request, putUploadMaxLength, this.uploadCacheFolder, 1024, fileFieldNames);
+		FormDataReceiver data = FormDataReceiver.receive(request, this.putUploadMaxLength, this.uploadCacheFolder, 1024, fileFieldNames);
 		
 		//	get upload file MIME type
 		String mimeType = data.getFieldValue("mimeType");
@@ -727,6 +742,24 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		String[] rdIts = rd.getIdentifierTypes();
 		for (int t = 0; t < rdIts.length; t++)
 			docAttributes.setProperty(("ID-" + rdIts[t]), rd.getIdentifier(rdIts[t]));
+		
+		//	loop through any other attributes
+		String[] fieldNames = data.getFieldNames();
+		for (int f = 0; f < fieldNames.length; f++) {
+			if ("mimeType".equals(fieldNames[f]))
+				continue;
+			if ("user".equals(fieldNames[f]))
+				continue;
+			if ("file".equals(fieldNames[f]))
+				continue;
+			if (docAttributes.contains(fieldNames[f]))
+				continue;
+			if (docAttributes.contains("ID-" + fieldNames[f]))
+				continue;
+			String fieldValue = data.getFieldValue(fieldNames[f]);
+			if (!"".equals(fieldValue))
+				docAttributes.setProperty(fieldNames[f], fieldValue);
+		}
 		
 		//	get input stream for document proper, as well as source file name
 		FieldValueInputStream docDataSource = data.getFieldByteStream("file");

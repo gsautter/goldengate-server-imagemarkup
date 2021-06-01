@@ -356,9 +356,11 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	}
 	
 	private static final String SHOW_VERSION_HISTORY_COMMAND = "showVersions";
+	private static final String REVERT_DOCUMENT_COMMAND = "revertDoc";
+	private static final String CHECKOUT_STATE_COMMAND = "checkoutState";
+	private static final String RELEASE_DOCUMENT_COMMAND = "releaseDoc";
 	private static final String EXPORT_SOURCE_COMMAND = "exportSource";
 	private static final String ISSUE_EVENT_COMMAND = "issueEvent";
-	private static final String REVERT_DOCUMENT_COMMAND = "revertDoc";
 	
 	/*
 	 * (non-Javadoc)
@@ -459,6 +461,66 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 					}
 				}
 				else this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify the document ID and the version number.");
+			}
+		};
+		cal.add(ca);
+		
+		//	show the checkout state of some document
+		ca = new ComponentActionConsole() {
+			public String getActionCommand() {
+				return CHECKOUT_STATE_COMMAND;
+			}
+			public String[] getExplanation() {
+				String[] explanation = {
+						CHECKOUT_STATE_COMMAND + " <documentId>",
+						"Show the checkout status of a document:",
+						"- <documentId>: The ID of the document to check"
+					};
+				return explanation;
+			}
+			public void performActionConsole(String[] arguments) {
+				if (arguments.length == 1) {
+					String checkoutUser = getCheckoutUser(arguments[0]);
+					if (checkoutUser == null)
+						this.reportError("Invalid document ID '" + arguments[0] + "'.");
+					else if ("".equals(checkoutUser))
+						this.reportResult("Document '" + arguments[0] + "' is not checked out by anyone.");
+					else this.reportResult("Document '" + arguments[0] + "' is currently checked out by '" + checkoutUser + "'.");
+				}
+				else this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify the document ID as the only argument.");
+			}
+		};
+		cal.add(ca);
+		
+		//	clear the checkout state some document
+		ca = new ComponentActionConsole() {
+			public String getActionCommand() {
+				return RELEASE_DOCUMENT_COMMAND;
+			}
+			public String[] getExplanation() {
+				String[] explanation = {
+						RELEASE_DOCUMENT_COMMAND + " <documentId> <checkoutUser>",
+						"Clear the checkout status of a document:",
+						"- <documentId>: The ID of the document to release",
+						"- <checkoutUser>: The user currently holding the lock on the document with the argument ID",
+					};
+				return explanation;
+			}
+			public void performActionConsole(String[] arguments) {
+				if (arguments.length == 2) {
+					String checkoutUser = getCheckoutUser(arguments[0]);
+					if (checkoutUser == null)
+						this.reportError("Invalid document ID '" + arguments[0] + "'.");
+					else if ("".equals(checkoutUser))
+						this.reportError("Document '" + arguments[0] + "' is not checked out by anyone.");
+					else if (!checkoutUser.equals(arguments[1]))
+						this.reportError("Document '" + arguments[0] + "' is not checked out by '" + arguments[1] + "'.");
+					else {
+						releaseDocument(arguments[1], arguments[0]);
+						this.reportResult("Document '" + arguments[0] + "' released successfully.");
+					}
+				}
+				else this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify the document ID and checkout user as the only argument.");
 			}
 		};
 		cal.add(ca);
@@ -622,57 +684,57 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 			}
 		};
 		cal.add(ca);
-		
-		// list documents
-		ca = new ComponentActionNetwork() {
-			public String getActionCommand() {
-				return GET_DOCUMENT_LIST_SHARED;
-			}
-			public void performActionNetwork(BufferedReader input, BufferedWriter output) throws IOException {
-				
-				// check authentication
-				String sessionId = input.readLine();
-				if (!uaa.isValidSession(sessionId)) {
-					output.write("Invalid session (" + sessionId + ")");
-					output.newLine();
-					logWarning("Request for invalid session - " + sessionId);
-					return;
-				}
-				
-				//	read filter string
-				String filterString = input.readLine();
-				Properties filter;
-				if (filterString.length() == 0)
-					filter = null;
-				else {
-					String[] filters = filterString.split("\\&");
-					filter = new Properties();
-					for (int f = 0; f < filters.length; f++) {
-						String[] pair = filters[f].split("\\=");
-						if (pair.length == 2) {
-							String name = pair[0].trim();
-							String value = URLDecoder.decode(pair[1].trim(), ENCODING).trim();
-							
-							String existingValue = filter.getProperty(name);
-							if (existingValue != null)
-								value = existingValue + "\n" + value;
-							
-							filter.setProperty(name, value);
-						}
-					}
-				}
-				
-				//	TODO use fix registered extensions
-				ImsDocumentList docList = getDocumentList(uaa.getUserNameForSession(sessionId), false, filter, null);
-				
-				output.write(GET_DOCUMENT_LIST_SHARED);
-				output.newLine();
-				
-				docList.writeData(output);
-				output.newLine();
-			}
-		};
-		cal.add(ca);
+//		
+//		// list documents TODOne remove this unless still occurring in server logs
+//		ca = new ComponentActionNetwork() {
+//			public String getActionCommand() {
+//				return GET_DOCUMENT_LIST_SHARED;
+//			}
+//			public void performActionNetwork(BufferedReader input, BufferedWriter output) throws IOException {
+//				
+//				// check authentication
+//				String sessionId = input.readLine();
+//				if (!uaa.isValidSession(sessionId)) {
+//					output.write("Invalid session (" + sessionId + ")");
+//					output.newLine();
+//					logWarning("Request for invalid session - " + sessionId);
+//					return;
+//				}
+//				
+//				//	read filter string
+//				String filterString = input.readLine();
+//				Properties filter;
+//				if (filterString.length() == 0)
+//					filter = null;
+//				else {
+//					String[] filters = filterString.split("\\&");
+//					filter = new Properties();
+//					for (int f = 0; f < filters.length; f++) {
+//						String[] pair = filters[f].split("\\=");
+//						if (pair.length == 2) {
+//							String name = pair[0].trim();
+//							String value = URLDecoder.decode(pair[1].trim(), ENCODING).trim();
+//							
+//							String existingValue = filter.getProperty(name);
+//							if (existingValue != null)
+//								value = existingValue + "\n" + value;
+//							
+//							filter.setProperty(name, value);
+//						}
+//					}
+//				}
+//				
+//				//	TODO_above use fix registered extensions
+//				ImsDocumentList docList = getDocumentList(uaa.getUserNameForSession(sessionId), false, filter, null);
+//				
+//				output.write(GET_DOCUMENT_LIST_SHARED);
+//				output.newLine();
+//				
+//				docList.writeData(output);
+//				output.newLine();
+//			}
+//		};
+//		cal.add(ca);
 		
 		// deliver document update protocol
 		ca = new ComponentActionNetwork() {
@@ -1115,7 +1177,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 					cac.reportError(ioe);
 					return;
 				}
-				GoldenGateServerEventService.notify(new ImsDocumentEvent(updateUser, docId, docData, docData.getDocumentVersion(), GoldenGateIMS.class.getName(), updateTime, new EventLogger() {
+				GoldenGateServerEventService.notify(new ImsDocumentEvent(updateUser, updateUser, docId, docData, docData.getDocumentVersion(), GoldenGateIMS.class.getName(), updateTime, new EventLogger() {
 					public void writeLog(String logEntry) {}
 				}));
 				count++;
@@ -1968,14 +2030,14 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		int version = this.doFinalizeDocumentUpdate(docData, updateUser, checkoutUser, logger, time);
 		
 		docData.setReadOnly(true);
-		GoldenGateServerEventService.notify(new ImsDocumentEvent(updateUser, docData.docId, docData, version, GoldenGateIMS.class.getName(), time, logger) {
+		GoldenGateServerEventService.notify(new ImsDocumentEvent(updateUser, checkoutUser, docData.docId, docData, version, GoldenGateIMS.class.getName(), time, logger) {
 			public void notificationComplete() {
 				if (logger instanceof DocumentUpdateProtocol)
 					((DocumentUpdateProtocol) logger).close();
 			}
 		});
 		if (checkoutUser == null) // issue release event if document is not locked and thus free for editing
-			GoldenGateServerEventService.notify(new ImsDocumentEvent(updateUser, docData.docId, null, -1, ImsDocumentEvent.RELEASE_TYPE, GoldenGateIMS.class.getName(), time, null));
+			GoldenGateServerEventService.notify(new ImsDocumentEvent(updateUser, checkoutUser, docData.docId, null, -1, ImsDocumentEvent.RELEASE_TYPE, GoldenGateIMS.class.getName(), time, null));
 		
 		return version;
 	}
@@ -2451,7 +2513,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		
 		//	log checkout and notify listeners
 		this.logInfo("document " + documentId + " checked out by '" + userName + "'.");
-		GoldenGateServerEventService.notify(new ImsDocumentEvent(userName, documentId, null, -1, ImsDocumentEvent.CHECKOUT_TYPE, GoldenGateIMS.class.getName(), checkoutTime, null));
+		GoldenGateServerEventService.notify(new ImsDocumentEvent(userName, documentId, ImsDocumentEvent.CHECKOUT_TYPE, GoldenGateIMS.class.getName(), checkoutTime));
 		
 		//	load document on top of local cache folder
 		return docData;
@@ -2519,7 +2581,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		//	release document if possible
 		if (this.uaa.isAdmin(userName) || checkoutUser.equals(userName)) { // admin user, or user holding the lock
 			this.setCheckoutUser(docId, "", -1);
-			GoldenGateServerEventService.notify(new ImsDocumentEvent(userName, docId, null, -1, ImsDocumentEvent.RELEASE_TYPE, GoldenGateIMS.class.getName(), System.currentTimeMillis(), null));
+			GoldenGateServerEventService.notify(new ImsDocumentEvent(userName, docId, ImsDocumentEvent.RELEASE_TYPE, GoldenGateIMS.class.getName(), System.currentTimeMillis()));
 		}
 	}
 	
@@ -2542,13 +2604,16 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	
 	/**
 	 * Check if a document with a given ID exists and is free for checkout and
-	 * update.
+	 * update. A document is also editable for a user who already holds the
+	 * checkout lock.
 	 * @param docId the ID of the document to check
+	 * @param userName the user name intending to edit the document
 	 * @return true if the document with the specified ID exists and is free
 	 *            for editing
 	 */
-	public boolean isDocumentEditable(String docId) {
-		return "".equals(this.getCheckoutUser(docId));
+	public boolean isDocumentEditable(String docId, String userName) {
+		String checkoutUser = this.getCheckoutUser(docId);
+		return ("".equals(checkoutUser) || ((userName != null) && userName.equals(checkoutUser)));
 	}
 	
 	/**

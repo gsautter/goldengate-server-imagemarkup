@@ -27,6 +27,9 @@
  */
 package de.uka.ipd.idaho.goldenGateServer.ims;
 
+import java.util.Map;
+
+import de.uka.ipd.idaho.easyIO.util.JsonParser;
 import de.uka.ipd.idaho.gamta.util.imaging.ImagingConstants;
 import de.uka.ipd.idaho.goldenGateServer.GoldenGateServerConstants;
 import de.uka.ipd.idaho.goldenGateServer.ims.GoldenGateIMS.ImsDocumentData;
@@ -68,9 +71,9 @@ public interface GoldenGateImsConstants extends GoldenGateServerConstants, Imagi
 	
 	/** the command for loading a list of all documents in the IMS */
 	public static final String GET_DOCUMENT_LIST = "IMS_GET_DOCUMENT_LIST";
-	
-	/** the command for loading a list of all documents in the IMS */
-	public static final String GET_DOCUMENT_LIST_SHARED = "IMS_GET_DOCUMENT_LIST_SHARED";
+//	
+//	/** the command for loading a list of all documents in the IMS */
+//	public static final String GET_DOCUMENT_LIST_SHARED = "IMS_GET_DOCUMENT_LIST_SHARED";
 	
 	/** the command for retrieving the update protocol of document, i.e. messages that describe which other modifications the new version incurred throughout the server (only modifications that happen synchronously on update notification, though) */
 	public static final String GET_UPDATE_PROTOCOL = "IMS_GET_UPDATE_PROTOCOL";
@@ -90,32 +93,31 @@ public interface GoldenGateImsConstants extends GoldenGateServerConstants, Imagi
 	
 	/** the permission for deleting documents from the IMS */
 	public static final String DELETE_DOCUMENT_PERMISSION = "IMS.DeleteDocument";
-	
-	
-	/** the attribute holding the name of a document */
-	public static final String DOCUMENT_VERSION_ATTRIBUTE = "docVersion";
+//	
+//	
+//	/** the attribute holding the name of a document */
+//	public static final String DOCUMENT_VERSION_ATTRIBUTE = "docVersion";
 	
 	
 	/**
-	 * GoldenGATE IMS specific document storage event, adding types for
-	 * checkout and release.
+	 * GoldenGATE IMS specific data object event.
 	 * 
 	 * @author sautter
 	 */
 	public static class ImsDocumentEvent extends DataObjectEvent {
 		
 		/**
-		 * Specialized storage listener for GoldenGATE IMS, receiving notifications of
-		 * document checkout and release operations, besides update and delete
+		 * Specialized storage listener for GoldenGATE IMS, receiving
+		 * notifications  document checkout, update, delete, and release
 		 * operations.
 		 * 
 		 * @author sautter
 		 */
 		public static abstract class ImsDocumentEventListener extends GoldenGateServerEventListener {
-			
-			/* (non-Javadoc)
-			 * @see de.uka.ipd.idaho.goldenGateServer.events.GoldenGateServerEventListener#notify(de.uka.ipd.idaho.goldenGateServer.events.GoldenGateServerEvent)
-			 */
+			static {
+				//	register factory for event instances soon as first listener created
+				registerFactory();
+			}
 			public void notify(GoldenGateServerEvent gse) {
 				if (gse instanceof ImsDocumentEvent) {
 					ImsDocumentEvent dse = ((ImsDocumentEvent) gse);
@@ -172,9 +174,13 @@ public interface GoldenGateImsConstants extends GoldenGateServerConstants, Imagi
 		 */
 		public final ImsDocumentData documentData;
 		
+		/** The name of the user who authenticated the event */
+		public final String authUser;
+		
 		/**
 		 * Constructor for update events
 		 * @param user the name of the user who caused the event
+		 * @param authUser the name of the user who authenticated the event
 		 * @param documentId the ID of the document that was updated
 		 * @param documentData the data of the document that was updated
 		 * @param version the current version number of the document (after the
@@ -184,8 +190,8 @@ public interface GoldenGateImsConstants extends GoldenGateServerConstants, Imagi
 		 * @param logger a DocumentStorageLogger to collect log messages while the
 		 *            event is being processed in listeners
 		 */
-		public ImsDocumentEvent(String user, String documentId, ImsDocumentData documentData, int version, String sourceClassName, long eventTime, EventLogger logger) {
-			this(user, documentId, documentData, version, UPDATE_TYPE, sourceClassName, eventTime, logger);
+		public ImsDocumentEvent(String user, String authUser, String documentId, ImsDocumentData documentData, int version, String sourceClassName, long eventTime, EventLogger logger) {
+			this(user, authUser, documentId, documentData, version, UPDATE_TYPE, sourceClassName, eventTime, logger);
 		}
 		
 		/**
@@ -198,12 +204,25 @@ public interface GoldenGateImsConstants extends GoldenGateServerConstants, Imagi
 		 *            event is being processed in listeners
 		 */
 		public ImsDocumentEvent(String user, String documentId, String sourceClassName, long eventTime, EventLogger logger) {
-			this(user, documentId, null, -1, DELETE_TYPE, sourceClassName, eventTime, logger);
+			this(user, user, documentId, null, -1, DELETE_TYPE, sourceClassName, eventTime, logger);
+		}
+		
+		/**
+		 * Constructor for checkout and release events
+		 * @param user the name of the user who caused the event
+		 * @param documentId the ID of the document that was deleted
+		 * @param type the event type (used for dispatching)
+		 * @param sourceClassName the class name of the component issuing the event
+		 * @param eventTime the timstamp of the event
+		 */
+		public ImsDocumentEvent(String user, String documentId, int type, String sourceClassName, long eventTime) {
+			this(user, user, documentId, null, -1, type, sourceClassName, eventTime, null);
 		}
 		
 		/**
 		 * Constructor for custom-type events
 		 * @param user the name of the user who caused the event
+		 * @param authUser the name of the user who authenticated the event
 		 * @param documentId the ID of the document that was updated
 		 * @param documentData the data of the document that was updated
 		 * @param version the current version number of the document (after the
@@ -214,9 +233,52 @@ public interface GoldenGateImsConstants extends GoldenGateServerConstants, Imagi
 		 * @param logger a DocumentStorageLogger to collect log messages while the
 		 *            event is being processed in listeners
 		 */
-		public ImsDocumentEvent(String user, String documentId, ImsDocumentData documentData, int version, int type, String sourceClassName, long eventTime, EventLogger logger) {
+		public ImsDocumentEvent(String user, String authUser, String documentId, ImsDocumentData documentData, int version, int type, String sourceClassName, long eventTime, EventLogger logger) {
 			super(user, documentId, version, type, sourceClassName, eventTime, logger);
 			this.documentData = documentData;
+			this.authUser = authUser;
+		}
+		
+		/* (non-Javadoc)
+		 * @see de.uka.ipd.idaho.goldenGateServer.util.DataObjectUpdateConstants.DataObjectEvent#getParameterString()
+		 */
+		public String getParameterString() {
+			return (super.getParameterString() + " " + this.authUser);
+		}
+		
+		public Map toJsonObject() {
+			Map json = super.toJsonObject();
+			json.put("eventClass", ImsDocumentEvent.class.getName());
+			json.put("authUser", this.authUser);
+			return json;
+		}
+		
+		private static EventFactory factory = new EventFactory() {
+			public GoldenGateServerEvent getEvent(Map json) {
+				if (!ImsDocumentEvent.class.getName().equals(json.get("eventClass")))
+					return null;
+				Number eventType = JsonParser.getNumber(json, "eventType");
+				String sourceClassName = JsonParser.getString(json, "sourceClass");
+				Number eventTime = JsonParser.getNumber(json, "eventTime");
+//				String eventId = JsonParser.getString(json, "eventId");
+//				boolean isHighPriority = (JsonParser.getBoolean(json, "highPriority") != null);
+				
+				String user = JsonParser.getString(json, "user");
+				String authUser = JsonParser.getString(json, "authUser");
+				String docId = JsonParser.getString(json, "dataId");
+				Number docVersion = JsonParser.getNumber(json, "dataVersion");
+				return new ImsDocumentEvent(user, authUser, docId, null, docVersion.intValue(), eventType.intValue(), sourceClassName, eventTime.longValue(), null);
+			}
+			public GoldenGateServerEvent getEvent(String className, String paramString) {
+				return (ImsDocumentEvent.class.getName().equals(className) ? parseEvent(paramString) : null);
+			}
+		};
+		static void registerFactory() {
+			addFactory(factory);
+		}
+		static {
+			//	register factory for event instances soon as first instance created
+			registerFactory();
 		}
 		
 		/**
@@ -227,7 +289,7 @@ public interface GoldenGateImsConstants extends GoldenGateServerConstants, Imagi
 		 */
 		public static ImsDocumentEvent parseEvent(String data) {
 			String[] dataItems = data.split("\\s");
-			return new ImsDocumentEvent(dataItems[4], dataItems[5], null, Integer.parseInt(dataItems[6]), Integer.parseInt(dataItems[0]), dataItems[1], Long.parseLong(dataItems[2]), null);
+			return new ImsDocumentEvent(dataItems[4], ((dataItems.length < 8) ? dataItems[4] : dataItems[7]), dataItems[5], null, Integer.parseInt(dataItems[6]), Integer.parseInt(dataItems[0]), dataItems[1], Long.parseLong(dataItems[2]), null);
 		}
 	}
 }

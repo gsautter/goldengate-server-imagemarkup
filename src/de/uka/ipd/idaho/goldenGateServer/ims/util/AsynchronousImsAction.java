@@ -47,7 +47,6 @@ import de.uka.ipd.idaho.stringUtils.csvHandler.StringTupel;
  * @author sautter
  */
 public abstract class AsynchronousImsAction extends AsynchronousConsoleAction implements LiteratureConstants {
-	
 	private GoldenGateIMS ims;
 	private String label;
 	
@@ -112,6 +111,13 @@ public abstract class AsynchronousImsAction extends AsynchronousConsoleAction im
 	 * @throws IOException
 	 */
 	protected abstract void update(StringTupel docData, String[] arguments) throws IOException;
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.goldenGateServer.util.AsynchronousConsoleAction#getActionName()
+	 */
+	protected String getActionName() {
+		return (this.ims.getLetterCode() + "." + super.getActionName());
+	}
 	
 	/**
 	 * Retrieve an actual document from the backing GoldenGATE IMS.

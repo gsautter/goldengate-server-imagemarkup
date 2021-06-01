@@ -57,6 +57,9 @@
 			<!-- GG Imagine JARs -->
 			<fileset dir="${lib.home}" includes="GoldenGATE.jar" />
 			<fileset dir="${lib.home}" includes="GgImagine.jar" />
+			
+			<!-- GG Server utility JARs -->
+			<fileset dir="${lib.home}" includes="GgServerSlaveUtils.jar" />
 		</copy>
 	</target>
 </project>

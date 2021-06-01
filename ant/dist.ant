@@ -5,7 +5,7 @@
 -->
 
 <project name="dist">
-	<target name="zips" depends="backenddocszip,imsdociojar,imecltjar" />
+	<target name="zips" depends="backenddocszip,imsdociojar,imecltjar,impdsbatchjar" />
 	
 	<target name="backenddocszip" depends="imsjar,elsimsjar,imrjar,imejar,imijar,imipdfjar,imipdfslavejar,impjar,impslavejar,imejar,imecltjar">
 		<delete file="${pack.serverim}"/>
@@ -193,6 +193,20 @@
 			</fileset>
 			<fileset dir="${src.home}">
 				<include name="**/goldenGateServer/imp/slave/*.java" />
+			</fileset>
+			<fileset dir="." includes="LICENSE.txt"/>
+		</jar>
+	</target>
+	<target name="impdsbatchjar" depends="check-ggi" if="${ggi.exists}">
+		<delete file="${jar.impdsbatch}" />
+		<jar destfile="${jar.impdsbatch}" manifest="${file.home}/MANIFEST.components.MF">
+			<fileset dir="${build.home}/classes">
+				<include name="**/goldenGateServer/imp/GoldenGateImpConstants*.class" />
+				<include name="**/goldenGateServer/imp/client/*.class" />
+			</fileset>
+			<fileset dir="${src.home}">
+				<include name="**/goldenGateServer/imp/GoldenGateImpConstants.java" />
+				<include name="**/goldenGateServer/ims/client/*.java" />
 			</fileset>
 			<fileset dir="." includes="LICENSE.txt"/>
 		</jar>

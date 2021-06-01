@@ -42,9 +42,9 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.TreeMap;
 
 import de.uka.ipd.idaho.easyIO.IoProvider;
 import de.uka.ipd.idaho.easyIO.sql.TableColumnDefinition;
@@ -212,11 +212,29 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 			}
 			
 			//	get user name to credit (if any)
-			String userName = ((String) this.getAttribute(GoldenGateIMS.CHECKIN_USER_ATTRIBUTE, defaultImportUserName));
+//			String userName = ((String) this.getAttribute(GoldenGateIMS.CHECKIN_USER_ATTRIBUTE, defaultImportUserName));
+			String userName = ((String) this.getAttribute(GoldenGateIMS.CHECKIN_USER_ATTRIBUTE, importUserName));
 			
 			//	store document in IMS an clean up
+			boolean isUpdate = checkDocumentExists(doc.docId);
 			try {
-				ims.uploadDocument(userName, doc, new EventLogger() {
+//				if (isUpdate) {
+//					ims.checkoutDocumentAsData(userName, doc.docId);
+//					ims.updateDocument(userName, doc, new EventLogger() {
+//						public void writeLog(String logEntry) {
+//							logInfo(logEntry);
+//						}
+//					});
+//					
+//				}
+//				else ims.uploadDocument(userName, doc, new EventLogger() {
+//					public void writeLog(String logEntry) {
+//						logInfo(logEntry);
+//					}
+//				});
+				if (isUpdate)
+					ims.checkoutDocumentAsData(importUserName, doc.docId);
+				ims.updateDocument(userName, importUserName, doc, new EventLogger() {
 					public void writeLog(String logEntry) {
 						logInfo(logEntry);
 					}
@@ -226,6 +244,11 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 			catch (IOException ioe) {
 				logError("Error storing document imported from " + this.toString() + ": " + ioe.getMessage());
 				logError(ioe);
+			}
+			finally {
+//				if (isUpdate)
+//					ims.releaseDocument(userName, doc.docId);
+				ims.releaseDocument(importUserName, doc.docId);
 			}
 			
 			//	clean up cached data file
@@ -259,21 +282,26 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 				docId = ((String) this.getAttribute(GoldenGateIMS.DOCUMENT_ID_ATTRIBUTE));
 			
 			//	get user name to credit (if any)
-			String userName = ((String) this.getAttribute(GoldenGateIMS.CHECKIN_USER_ATTRIBUTE, defaultImportUserName));
+//			String userName = ((String) this.getAttribute(GoldenGateIMS.CHECKIN_USER_ATTRIBUTE, defaultImportUserName));
+			String userName = ((String) this.getAttribute(GoldenGateIMS.CHECKIN_USER_ATTRIBUTE, importUserName));
 			
 			//	store document in IMS
 			ImsDocumentData iDocData = null;
+			boolean isUpdate = checkDocumentExists(docId);
 			try {
 				
 				//	get document data from backing IMS
-				iDocData = ims.getDocumentData(docId, true);
+				if (isUpdate)
+//					iDocData = ims.checkoutDocumentAsData(userName, docId);
+					iDocData = ims.checkoutDocumentAsData(importUserName, docId);
+				else iDocData = ims.getDocumentData(docId, true);
 				
 				//	copy entries
 				ImDocumentEntry[] docEntries = docData.getEntries();
 				byte[] buffer = new byte[1024];
 				for (int e = 0; e < docEntries.length; e++) {
 					InputStream entryIn = docData.getInputStream(docEntries[e]);
-					OutputStream entryOut = docData.getOutputStream(docEntries[e]);
+					OutputStream entryOut = iDocData.getOutputStream(docEntries[e]);
 					for (int r; (r = entryIn.read(buffer, 0, buffer.length)) != -1;)
 						entryOut.write(buffer, 0, r);
 					entryOut.flush();
@@ -282,13 +310,19 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 				}
 				
 				//	finally ...
-				ims.uploadDocumentFromData(userName, iDocData, null);
+//				if (isUpdate)
+//					ims.updateDocumentFromData(userName, iDocData, null);
+//				else ims.uploadDocumentFromData(userName, iDocData, null);
+				ims.updateDocumentFromData(userName, importUserName, iDocData, null);
 			}
 			catch (IOException ioe) {
 				logError("Error storing document imported from " + this.toString() + ": " + ioe.getMessage());
 				logError(ioe);
 			}
 			finally {
+//				if (isUpdate)
+//					ims.releaseDocument(userName, docId);
+				ims.releaseDocument(importUserName, docId);
 				if (iDocData != null)
 					iDocData.dispose();
 			}
@@ -392,7 +426,7 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 		 * point by throwing a runtime exception; the exception message should
 		 * explain why the import was cancelled at the last moment.
 		 * @param idi the import that has finished
-		 * @param doc the imported document data
+		 * @param docData the imported document data
 		 * @throws RuntimeException
 		 */
 		public abstract void importFinished(ImiDocumentImport idi, ImDocumentData docData) throws RuntimeException;
@@ -445,12 +479,13 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 	
 	private GoldenGateIMS ims;
 	
-	private String defaultImportUserName;
+//	private String defaultImportUserName;
+	private String importUserName;
 	
 	private File workingFolder;
 	private File cacheFolder;
 	
-	private ImiDocumentImporter[] importers;
+	private DocumentImporterTray[] importerTrays;
 	
 	private AsynchronousDataActionHandler importHandler;
 	
@@ -465,8 +500,9 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 	 */
 	protected void initComponent() {
 		
-		//	get default import user name
-		this.defaultImportUserName = this.configuration.getSetting("defaultImportUserName", "GgIMS");
+		//	get import user name
+//		this.defaultImportUserName = this.configuration.getSetting("defaultImportUserName", "GgIMS");
+		this.importUserName = this.configuration.getSetting("importUserName", "GgIMS");
 		
 		//	get working folder
 		String workingFolderName = this.configuration.getSetting("workingFolderName", "Importers");
@@ -577,33 +613,36 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 		log.logResult("Importers loaded");
 		
 		//	store importers, and sort them by priority
-		ImiDocumentImporter[] importers = new ImiDocumentImporter[importerObjects.length];
+		DocumentImporterTray[] importerTrays = new DocumentImporterTray[importerObjects.length];
 		for (int i = 0; i < importerObjects.length; i++)
-			importers[i] = ((ImiDocumentImporter) importerObjects[i]);
-		Arrays.sort(importers, new Comparator() {
-			public int compare(Object obj1, Object obj2) {
-				ImiDocumentImporter idi1 = ((ImiDocumentImporter) obj1);
-				ImiDocumentImporter idi2 = ((ImiDocumentImporter) obj2);
-				return (idi2.getPrority() - idi1.getPrority());
-			}
-		});
+			importerTrays[i] = new DocumentImporterTray((ImiDocumentImporter) importerObjects[i]);
+		Arrays.sort(importerTrays);
 		
 		//	make importers available
-		this.importers = importers;
+		this.importerTrays = importerTrays;
 		log.logResult("Importers registered");
 	}
 	
 	private synchronized void shutdownImporters(GoldenGateServerActivityLogger log) {
 		
 		//	make importers private
-		ImiDocumentImporter[] importers = this.importers;
-		this.importers = null;
+		DocumentImporterTray[] importerTrays = this.importerTrays;
+		this.importerTrays = null;
 		
 		//	shut down importers
 		log.logResult("Finalizing importers");
-		for (int i = 0; i < importers.length; i++)
-			importers[i].exit();
+		for (int i = 0; i < importerTrays.length; i++)
+			importerTrays[i].importer.exit();
 		log.logResult("Importers finalized");
+	}
+	
+	/**
+	 * Retrieve the user name IMI uses to check out documents for updates and
+	 * for storing new documents.
+	 * @return the batch user name
+	 */
+	public String getImportUserName() {
+		return this.importUserName;
 	}
 	
 	/* (non-Javadoc)
@@ -618,9 +657,11 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 		this.shutdownImporters(null);
 	}
 	
-	private static final String IMPORT_DOCUMENT_COMMAND = "import";
+	private static final String LIST_IMPORTERS_COMMAND = "importers";
 	private static final String RELOAD_IMPORTERS_COMMAND = "reload";
 	private static final String QUEUE_SIZE_COMMAND = "queueSize";
+	private static final String IMPORT_DOCUMENT_COMMAND = "import";
+	private static final String IMPORTER_COMMAND = "importer";
 	
 	/*
 	 * (non-Javadoc)
@@ -629,6 +670,132 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 	public ComponentAction[] getActions() {
 		ArrayList cal = new ArrayList(Arrays.asList(this.importHandler.getActions()));
 		ComponentAction ca;
+		
+		//	list importers
+		ca = new ComponentActionConsole() {
+			public String getActionCommand() {
+				return LIST_IMPORTERS_COMMAND;
+			}
+			public String[] getExplanation() {
+				String[] explanation = {
+						LIST_IMPORTERS_COMMAND,
+						"List the importers currently installed in this IMI."
+					};
+				return explanation;
+			}
+			public void performActionConsole(String[] arguments) {
+				if (arguments.length != 0) {
+					this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
+					return;
+				}
+				this.reportResult("There are currently " + importerTrays.length + " importers installed in this IMI:");
+				for (int i = 0; i < importerTrays.length; i++) {
+					String[] description = importerTrays[i].importer.getDescription();
+					for (int d = 0; d < description.length; d++)
+						this.reportResult(((d == 0) ? "- " : "  ") + description[d]);
+				}
+			}
+		};
+		cal.add(ca);
+		
+		//	reload importers
+		ca = new ComponentActionConsole() {
+			public String getActionCommand() {
+				return RELOAD_IMPORTERS_COMMAND;
+			}
+			public String[] getExplanation() {
+				String[] explanation = {
+						RELOAD_IMPORTERS_COMMAND,
+						"Reload the importers currently installed in this IMI."
+					};
+				return explanation;
+			}
+			public void performActionConsole(String[] arguments) {
+				if (arguments.length == 0)
+					loadImporters(this);
+				else this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
+			}
+		};
+		cal.add(ca);
+		
+		//	list importers
+		ca = new ComponentActionConsole() {
+			public String getActionCommand() {
+				return IMPORTER_COMMAND;
+			}
+			public String[] getExplanation() {
+				String[] explanation = {
+						IMPORTER_COMMAND + " <importerName> <command> <argument> ...",
+						"Send a command to an importer instlled in this IMI:",
+						"- <importerName>: The nme of the importer the command is directed to",
+						"- <command>: The command to execute",
+						"- <argument>: An argument for the command to the importer (there can be no or any number of such arguments)"
+					};
+				return explanation;
+			}
+			public void performActionConsole(String[] arguments) {
+				if (arguments.length < 2) {
+					this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify at least the importer name and command.");
+					return;
+				}
+				
+				DocumentImporterTray importerTray = null;
+				for (int i = 0; i < importerTrays.length; i++)
+					if (importerTrays[i].importer.getName().equals(arguments[0])) {
+						importerTray = importerTrays[i];
+						break;
+					}
+				if (importerTray == null) {
+					this.reportError(" Invalid importer name '" + arguments[0] + "', use the '" + LIST_IMPORTERS_COMMAND + "' command to list available importers.");
+					return;
+				}
+				
+				if ("?".equals(arguments[1]) && (arguments.length == 2)) {
+					ComponentActionConsole[] actions = importerTray.getActions();
+					if (actions.length == 0) {
+						this.reportResult("There are no commands for importer '" + arguments[0] + "'");
+						return;
+					}
+					this.reportResult("Commands for importer '" + arguments[0] + "':");
+					for (int a = 0; a < actions.length; a++) {
+						String[] explanation = actions[a].getExplanation();
+						for (int e = 0; e < explanation.length; e++)
+							this.reportResult("  " + ((e == 0) ? "" : "  ") + explanation[e]);
+					}
+					return;
+				}
+				
+				ComponentActionConsole cac = importerTray.getAction(arguments[1]);
+				if (cac == null) {
+					this.reportError(" Invalid command '" + arguments[1] + "', use the '?' command to list available command.");
+					return;
+				}
+				String[] subArguments = new String[arguments.length - 2];
+				System.arraycopy(arguments, 2, subArguments, 0, subArguments.length);
+				cac.performActionConsole(subArguments, this);
+			}
+		};
+		cal.add(ca);
+		
+		//	check import queue
+		ca = new ComponentActionConsole() {
+			public String getActionCommand() {
+				return QUEUE_SIZE_COMMAND;
+			}
+			public String[] getExplanation() {
+				String[] explanation = {
+						QUEUE_SIZE_COMMAND,
+						"Show current size of import queue, i.e., number of pending imports."
+					};
+				return explanation;
+			}
+			public void performActionConsole(String[] arguments) {
+				if (arguments.length == 0)
+					this.reportResult(importHandler.getDataActionsPending() + " document imports pending.");
+				else this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
+			}
+		};
+		cal.add(ca);
 		
 		//	schedule import from URL, file, or folder (good for testing, and for trouble shooting)
 		ca = new ComponentActionConsole() {
@@ -773,7 +940,6 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 				}
 			}
 			
-			//	TODO facilitate using IMD
 			private void storeDocument(File docFile, Attributed attributes) throws IOException {
 				
 				//	load document TODO when importing IMF, use cache folder to ease resource consumption
@@ -783,9 +949,11 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 				AttributeUtils.copyAttributes(attributes, doc, AttributeUtils.ADD_ATTRIBUTE_COPY_MODE);
 				
 				//	get user name to credit (if any)
-				String userName = ((String) attributes.getAttribute(GoldenGateIMS.CHECKIN_USER_ATTRIBUTE, defaultImportUserName));
+//				String userName = ((String) attributes.getAttribute(GoldenGateIMS.CHECKIN_USER_ATTRIBUTE, defaultImportUserName));
+				String userName = ((String) attributes.getAttribute(GoldenGateIMS.CHECKIN_USER_ATTRIBUTE, importUserName));
 				
 				//	store document in IMS
+//				ims.uploadDocument(userName, doc, new EventLogger() {
 				ims.uploadDocument(userName, doc, new EventLogger() {
 					public void writeLog(String logEntry) {
 						reportResult(logEntry);
@@ -814,7 +982,8 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 				//	read user name
 				String user = input.readLine();
 				if (user.length() == 0)
-					user = defaultImportUserName;
+//					user = defaultImportUserName;
+					user = importUserName;
 				logInfo("Got user: " + user);
 				
 				//	read and check MIME type
@@ -859,7 +1028,8 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 				}
 				
 				//	add user name to attributes
-				if (user != defaultImportUserName)
+//				if (user != defaultImportUserName)
+				if (user != importUserName)
 					docAttributes.setAttribute(GoldenGateIMS.CHECKIN_USER_ATTRIBUTE, user);
 				
 				//	add file name to attributes
@@ -954,46 +1124,6 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 				//	finally ...
 				output.flush();
 				output.close();
-			}
-		};
-		cal.add(ca);
-		
-		//	reload importers
-		ca = new ComponentActionConsole() {
-			public String getActionCommand() {
-				return RELOAD_IMPORTERS_COMMAND;
-			}
-			public String[] getExplanation() {
-				String[] explanation = {
-						RELOAD_IMPORTERS_COMMAND,
-						"Reload the importers currently installed in this IMI."
-					};
-				return explanation;
-			}
-			public void performActionConsole(String[] arguments) {
-				if (arguments.length == 0)
-					loadImporters(this);
-				else this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
-			}
-		};
-		cal.add(ca);
-		
-		//	check import queue
-		ca = new ComponentActionConsole() {
-			public String getActionCommand() {
-				return QUEUE_SIZE_COMMAND;
-			}
-			public String[] getExplanation() {
-				String[] explanation = {
-						QUEUE_SIZE_COMMAND,
-						"Show current size of import queue, i.e., number of pending imports."
-					};
-				return explanation;
-			}
-			public void performActionConsole(String[] arguments) {
-				if (arguments.length == 0)
-					this.reportResult(importHandler.getDataActionsPending() + " document imports pending.");
-				else this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
 			}
 		};
 		cal.add(ca);
@@ -1172,14 +1302,14 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 		synchronized (this) {
 			
 			//	wait for importers to be reloaded
-			while (this.importers == null) try {
+			while (this.importerTrays == null) try {
 				GoldenGateIMI.this.wait(1000);
 			} catch (InterruptedException ie) {}
 			
 			//	get importer
-			for (int i = 0; i < this.importers.length; i++)
-				if (this.importers[i].canHandleImport(idi)) {
-					importer = this.importers[i];
+			for (int i = 0; i < this.importerTrays.length; i++)
+				if (this.importerTrays[i].importer.canHandleImport(idi)) {
+					importer = this.importerTrays[i].importer;
 					break;
 				}
 		}
@@ -1188,15 +1318,46 @@ public class GoldenGateIMI extends AbstractGoldenGateServerComponent implements 
 			return;
 		}
 		
-		//	TODO notify owner
+		//	notify owner
 		try {
 			idi.notifyStartring();
 		}
 		catch (RuntimeException re) {
-			// TODO Auto-generated catch block
+			this.logError("Exception notifying owner of starting import: " + re.getMessage());
+			this.logError(re);
 		}
 		
 		//	handle import
 		importer.handleImport(idi);
+	}
+	
+	private static class DocumentImporterTray implements Comparable {
+		final ImiDocumentImporter importer;
+		private TreeMap actions = null;
+		DocumentImporterTray(ImiDocumentImporter importer) {
+			this.importer = importer;
+		}
+		ComponentActionConsole[] getActions() {
+			this.ensureActions();
+			return ((ComponentActionConsole[]) this.actions.values().toArray(new ComponentActionConsole[this.actions.size()]));
+		}
+		ComponentActionConsole getAction(String command) {
+			this.ensureActions();
+			return ((ComponentActionConsole) this.actions.get(command));
+		}
+		private void ensureActions() {
+			if (this.actions != null)
+				return;
+			this.actions = new TreeMap();
+			ComponentActionConsole[] cacs = this.importer.getActions();
+			if (cacs == null)
+				return;
+			for (int a = 0; a < cacs.length; a++)
+				this.actions.put(cacs[a].getActionCommand(), cacs[a]);
+		}
+		public int compareTo(Object obj) {
+			DocumentImporterTray dit = ((DocumentImporterTray) obj);
+			return (dit.importer.getPrority() - this.importer.getPrority());
+		}
 	}
 }

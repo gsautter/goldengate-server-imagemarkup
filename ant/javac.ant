@@ -58,7 +58,9 @@
     		<include name="**/goldenGateServer/ime/GoldenGateImeConstants.java" />
     		<include name="**/goldenGateServer/ime/client/*.java" />
     		<include name="**/goldenGateServer/ime/data/*.java" />
-    		<include name="**/goldenGateServer/ims/GoldenGateImsConstants.java" />
+	   		<include name="**/goldenGateServer/imp/GoldenGateImpConstants.java" />
+    		<include name="**/goldenGateServer/imp/client/*.java" />
+	   		<include name="**/goldenGateServer/ims/GoldenGateImsConstants.java" />
     		<include name="**/goldenGateServer/ims/client/*.java" />
     		<include name="**/goldenGateServer/ims/data/*.java" />
 	        <classpath refid="compile.classpath" />

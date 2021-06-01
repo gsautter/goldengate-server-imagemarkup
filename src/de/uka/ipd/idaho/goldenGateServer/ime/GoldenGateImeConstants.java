@@ -39,9 +39,9 @@ public interface GoldenGateImeConstants extends GoldenGateServerConstants, Liter
 	
 	/** the command for loading a list of all documents in the IME, i.e., all the documents that have errors */
 	public static final String GET_DOCUMENT_LIST = "IME_GET_DOCUMENT_LIST";
-	
-	/** the command for loading a list of all documents in the IME, i.e., all the documents that have errors */
-	public static final String GET_DOCUMENT_LIST_SHARED = "IME_GET_DOCUMENT_LIST_SHARED";
+//	
+//	/** the command for loading a list of all documents in the IME, i.e., all the documents that have errors */
+//	public static final String GET_DOCUMENT_LIST_SHARED = "IME_GET_DOCUMENT_LIST_SHARED";
 	
 	/** the command for loading the error summary for a document */
 	public static final String GET_ERROR_SUMMARY = "IME_GET_ERROR_SUMMARY";
