@@ -117,7 +117,7 @@ public class GoldenGateImiClient implements GoldenGateImiConstants {
 			//	send separator line
 			out.newLine();
 			
-			//	send document data if in file mode
+			//	send document data if in file mode TODO change this to using file _path_
 			if (docDataSize >= 0) {
 				byte[] buffer = new byte[1024];
 				for (int r; (r = docDataSource.read(buffer, 0, buffer.length)) != -1;)

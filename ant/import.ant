@@ -71,6 +71,7 @@
     	<copy file="../goldengate-server/dist/Components/GgServerRES.jar" todir="${lib.home}" overwrite="true" verbose="false" />
        	<copy file="../goldengate-server/dist/Components/GgServerUAA.jar" todir="${lib.home}" overwrite="true" verbose="false" />
        	<copy file="../goldengate-server/dist/Components/GgServerELS.jar" todir="${lib.home}" overwrite="true" verbose="false" />
+      	<copy file="../goldengate-server/dist/Components/GgServerDTA.jar" todir="${lib.home}" overwrite="true" verbose="false" />
 	</target>
 	
 	<target name="check-fetch-ggi" unless="ggi.exists">

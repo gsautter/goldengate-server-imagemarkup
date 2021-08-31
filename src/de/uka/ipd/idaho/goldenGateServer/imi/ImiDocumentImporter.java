@@ -69,6 +69,17 @@ public abstract class ImiDocumentImporter {
 	 */
 	protected ImiDocumentImporter() {}
 	
+	/** Constructor for runtime clones
+	 * @param original the original importer whose configuration to copy
+	 */
+	protected ImiDocumentImporter(ImiDocumentImporter original) {
+		this.dataPath = original.dataPath;
+		this.parent= original.parent;
+		this.host = original.host;
+		this.workingFolder = original.workingFolder;
+		this.cacheFolder = original.cacheFolder;
+	}
+	
 	/**
 	 * Get the name of the importer. The name returned by this method must be a
 	 * valid file name. It best consists of letters, digits, underscores, and
@@ -185,6 +196,26 @@ public abstract class ImiDocumentImporter {
 	public abstract void handleImport(ImiDocumentImport idi);
 	
 	/**
+	 * Create a runtime clone of the importer, to handle a specific import. The
+	 * returned object is guaranteed to be used by a single thread at a time.
+	 * If an importer is capable of handling multiple concurrent call to its
+	 * implementation of the <code>handleImport()</code> method, this method
+	 * can simply return the importer object proper. Importers that have an
+	 * internal state that changes over the course of an import can overwrite
+	 * this method to return a clone of themselves that has the same configured
+	 * properties, but its own internal state. The argument name is for status
+	 * reports to the parent server component, mainly to help distinguish
+	 * individual imports that are running in parallel. This default
+	 * implementation returns this importer proper, sub classes are welcome to
+	 * overwrite it as needed.
+	 * @param name the name of the runtime clone
+	 * @return a runtime clone of the importer
+	 */
+	public ImiDocumentImporter getRuntimeClone(String name) {
+		return this;
+	}
+	
+	/**
 	 * Retrieve an array of console actions to interact with the importer via
 	 * the GoldenGATE Server console. This default implementation returns null,
 	 * subclasses are welcome to overwrite it as needed.
@@ -193,4 +224,12 @@ public abstract class ImiDocumentImporter {
 	public ComponentActionConsole[] getActions() {
 		return null;
 	}
+	
+	/**
+	 * Output the status of the currently running import to a console action.
+	 * This default implementation does nothing, subclasses are welcome to
+	 * overwrite it as needed.
+	 * @param cac the console action to report to
+	 */
+	public void reportImportStatus(ComponentActionConsole cac) {}
 }

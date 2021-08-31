@@ -112,7 +112,8 @@ public class GoldenGateImiUploadServlet extends GgServerHtmlServlet implements B
 		super.doInit();
 		
 		//	prepare for upload caching
-		this.uploadCacheFolder = new File(new File(this.webInfFolder, "caches"), "imsUploadData");
+//		this.uploadCacheFolder = new File(new File(this.webInfFolder, "caches"), "imsUploadData");
+		this.uploadCacheFolder = new File(this.cacheRootFolder, "imsUploadData");
 		this.uploadCacheFolder.mkdirs();
 		
 		//	connect to backing IMI

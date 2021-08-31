@@ -33,6 +33,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.TreeMap;
 
 import de.uka.ipd.idaho.easyIO.settings.Settings;
 import de.uka.ipd.idaho.easyIO.util.HashUtils.MD5;
@@ -42,6 +43,7 @@ import de.uka.ipd.idaho.goldenGateServer.GoldenGateServerComponent.ComponentActi
 import de.uka.ipd.idaho.goldenGateServer.GoldenGateServerComponent.ComponentActionConsole;
 import de.uka.ipd.idaho.goldenGateServer.imi.GoldenGateIMI.ImiDocumentImport;
 import de.uka.ipd.idaho.goldenGateServer.imi.ImiDocumentImporter;
+import de.uka.ipd.idaho.goldenGateServer.util.masterSlave.SlaveErrorRecorder;
 import de.uka.ipd.idaho.goldenGateServer.util.masterSlave.SlaveInstallerUtils;
 import de.uka.ipd.idaho.goldenGateServer.util.masterSlave.SlaveJob;
 import de.uka.ipd.idaho.goldenGateServer.util.masterSlave.SlaveProcessInterface;
@@ -55,6 +57,9 @@ import de.uka.ipd.idaho.im.util.ImDocumentIO;
  * @author sautter
  */
 public class PdfImporter extends ImiDocumentImporter {
+	private String name = "SyncPDF";
+	private boolean isMainDecoder = true;
+	
 	private int maxSlaveMemory = 4096;
 	private int maxSlaveCores = 1;
 	private File logFolder;
@@ -68,20 +73,40 @@ public class PdfImporter extends ImiDocumentImporter {
 	private Process decoderRun = null;
 	private SyncPdfSlaveProcessInterface decoderInterface;
 	private String decodingDocId = null;
+	private String decodingParams = null;
 	private long decodingStart = -1;
 	private String decodingStep = null;
 	private long decodingStepStart = -1;
 	private String decodingInfo = null;
 	private long decodingInfoStart = -1;
+	private int decodingProgress = -1;
+	private boolean decodeVerbose = false;
 	
 	/** the usual zero-argument constructor for class loading */
 	public PdfImporter() {}
+	
+	//	clone constructor for runtime clones in parallel decoding
+	private PdfImporter(PdfImporter original, String name) {
+		super(original);
+		this.name = name;
+		this.isMainDecoder = false;
+		
+		this.maxSlaveMemory = original.maxSlaveMemory;
+		this.maxSlaveCores = original.maxSlaveCores;
+		this.logFolder = original.logFolder;
+		this.docStyleListUrl = original.docStyleListUrl;
+		this.docStyleFolder = original.docStyleFolder;
+		
+		this.fontMode = original.fontMode;
+		this.fontCharset = original.fontCharset;
+		this.fontCharsetPath = original.fontCharsetPath;
+	}
 	
 	/* (non-Javadoc)
 	 * @see de.uka.ipd.idaho.goldenGateServer.imi.ImiDocumentImporter#getName()
 	 */
 	public String getName() {
-		return "SyncPDF";
+		return this.name;
 	}
 	
 	/* (non-Javadoc)
@@ -151,14 +176,21 @@ public class PdfImporter extends ImiDocumentImporter {
 		
 		//	install slave JAR to run it all from
 		SlaveInstallerUtils.installSlaveJar("PdfImporterSlave.jar", this.dataPath, this.workingFolder, true);
+		
+		//	set up collecting of errors from our slave processes
+		String slaveErrorPath = this.host.getServerProperty("SlaveProcessErrorPath");
+		if (slaveErrorPath != null)
+			SlaveErrorRecorder.setErrorPath(slaveErrorPath);
 	}
 	
-	private static final String PROCESS_STATUS_COMMAND = "status";
-	private static final String PROCESS_THREADS_COMMAND = "threads";
-	private static final String PROCESS_THREAD_GROUPS_COMMAND = "threadGroups";
-	private static final String PROCESS_STACK_COMMAND = "stack";
-	private static final String PROCESS_WAKE_COMMAND = "wake";
-	private static final String PROCESS_KILL_COMMAND = "kill";
+	private static final String IMPORT_STATUS_COMMAND = "status";
+	private static final String IMPORT_THREADS_COMMAND = "threads";
+	private static final String IMPORT_THREAD_GROUPS_COMMAND = "threadGroups";
+	private static final String IMPORT_STACK_COMMAND = "stack";
+	private static final String IMPORT_WAKE_COMMAND = "wake";
+	private static final String IMPORT_KILL_COMMAND = "kill";
+	private static final String SET_VERBOSE_COMMAND = "setVerbose";
+	private static final String SET_QUIET_COMMAND = "setQuiet";
 	
 	/* (non-Javadoc)
 	 * @see de.uka.ipd.idaho.goldenGateServer.imi.ImiDocumentImporter#getActions()
@@ -170,28 +202,19 @@ public class PdfImporter extends ImiDocumentImporter {
 		//	check processing status of a document
 		ca = new ComponentActionConsole() {
 			public String getActionCommand() {
-				return PROCESS_STATUS_COMMAND;
+				return IMPORT_STATUS_COMMAND;
 			}
 			public String[] getExplanation() {
 				String[] explanation = {
-						PROCESS_STATUS_COMMAND,
-						"Show the status of a document that is processing"
+						IMPORT_STATUS_COMMAND,
+						"Show the status of a document that is importing"
 					};
 				return explanation;
 			}
 			public void performActionConsole(String[] arguments) {
-				if (arguments.length != 0) {
-					this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
-					return;
-				}
-				if (decodingStart == -1) {
-					this.reportResult("There is no document processing at the moment");
-					return;
-				}
-				long time = System.currentTimeMillis();
-				this.reportResult("Decoding document " + decodingDocId + " (started " + (time - decodingStart) + "ms ago)");
-				this.reportResult(" - current step is " + decodingStep + " (since " + (time - decodingStepStart) + "ms)");
-				this.reportResult(" - current info is " + decodingInfo + " (since " + (time - decodingInfoStart) + "ms)");
+				if (arguments.length == 0)
+					reportImportStatus(this, true);
+				else this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
 			}
 		};
 		cal.add(ca);
@@ -199,12 +222,12 @@ public class PdfImporter extends ImiDocumentImporter {
 		//	list the threads of a batch processing a document
 		ca = new ComponentActionConsole() {
 			public String getActionCommand() {
-				return PROCESS_THREADS_COMMAND;
+				return IMPORT_THREADS_COMMAND;
 			}
 			public String[] getExplanation() {
 				String[] explanation = {
-						PROCESS_THREADS_COMMAND,
-						"Show the threads of the batch processing a document"
+						IMPORT_THREADS_COMMAND,
+						"Show the threads of the import of a document"
 					};
 				return explanation;
 			}
@@ -227,12 +250,12 @@ public class PdfImporter extends ImiDocumentImporter {
 		//	list the thread groups of a batch processing a document
 		ca = new ComponentActionConsole() {
 			public String getActionCommand() {
-				return PROCESS_THREAD_GROUPS_COMMAND;
+				return IMPORT_THREAD_GROUPS_COMMAND;
 			}
 			public String[] getExplanation() {
 				String[] explanation = {
-						PROCESS_THREAD_GROUPS_COMMAND,
-						"Show the thread groups of the batch processing a document"
+						IMPORT_THREAD_GROUPS_COMMAND,
+						"Show the thread groups of the import of a document"
 					};
 				return explanation;
 			}
@@ -255,12 +278,12 @@ public class PdfImporter extends ImiDocumentImporter {
 		//	check the stack of a batch processing a document
 		ca = new ComponentActionConsole() {
 			public String getActionCommand() {
-				return PROCESS_STACK_COMMAND;
+				return IMPORT_STACK_COMMAND;
 			}
 			public String[] getExplanation() {
 				String[] explanation = {
-						PROCESS_STACK_COMMAND + " <threadName>",
-						"Show the stack trace of the batch processing a document:",
+						IMPORT_STACK_COMMAND + " <threadName>",
+						"Show the stack trace of the import of a document:",
 						"- <threadName>: The name of the thread whose stack to show (optional, omitting targets main thread)"
 					};
 				return explanation;
@@ -284,12 +307,12 @@ public class PdfImporter extends ImiDocumentImporter {
 		//	wake a batch processing a document, or a thread therein
 		ca = new ComponentActionConsole() {
 			public String getActionCommand() {
-				return PROCESS_WAKE_COMMAND;
+				return IMPORT_WAKE_COMMAND;
 			}
 			public String[] getExplanation() {
 				String[] explanation = {
-						PROCESS_WAKE_COMMAND + " <threadName>",
-						"Wake the batch processing a document, or a thread therein:",
+						IMPORT_WAKE_COMMAND + " <threadName>",
+						"Wake the import of a document, or a thread therein:",
 						"- <threadName>: The name of the thread to wake (optional, omitting targets main thread)"
 					};
 				return explanation;
@@ -313,12 +336,12 @@ public class PdfImporter extends ImiDocumentImporter {
 		//	kill a batch processing a document, or a thread therein
 		ca = new ComponentActionConsole() {
 			public String getActionCommand() {
-				return PROCESS_KILL_COMMAND;
+				return IMPORT_KILL_COMMAND;
 			}
 			public String[] getExplanation() {
 				String[] explanation = {
-						PROCESS_KILL_COMMAND + " <threadName>",
-						"Kill the batch processing a document, or a thread therein:",
+						IMPORT_KILL_COMMAND + " <threadName>",
+						"Kill the import of a document, or a thread therein:",
 						"- <threadName>: The name of the thread to kill (optional, omitting targets main thread)"
 					};
 				return explanation;
@@ -339,8 +362,81 @@ public class PdfImporter extends ImiDocumentImporter {
 		};
 		cal.add(ca);
 		
+		//	setting verbosity makes sense only between decoding runs, not in runtime clones
+		if (this.isMainDecoder) {
+			
+			//	activate verbose decoding
+			ca = new ComponentActionConsole() {
+				public String getActionCommand() {
+					return SET_VERBOSE_COMMAND;
+				}
+				public String[] getExplanation() {
+					String[] explanation = {
+							SET_VERBOSE_COMMAND,
+							"Set decoding mode to verbose (does not work on running decodings)"
+						};
+					return explanation;
+				}
+				public void performActionConsole(String[] arguments) {
+					if (arguments.length == 0)
+						decodeVerbose = true;
+					else this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
+				}
+			};
+			cal.add(ca);
+			
+			//	deactivate verbose decoding
+			ca = new ComponentActionConsole() {
+				public String getActionCommand() {
+					return SET_QUIET_COMMAND;
+				}
+				public String[] getExplanation() {
+					String[] explanation = {
+							SET_QUIET_COMMAND,
+							"Set decoding mode to quiet (does not work on running decodings)"
+						};
+					return explanation;
+				}
+				public void performActionConsole(String[] arguments) {
+					if (arguments.length == 0)
+						decodeVerbose = false;
+					else this.reportError(" Invalid arguments for '" + this.getActionCommand() + "', specify no arguments.");
+				}
+			};
+			cal.add(ca);
+		}
+		
 		//	finally ...
 		return ((ComponentActionConsole[]) cal.toArray(new ComponentActionConsole[cal.size()]));
+	}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.goldenGateServer.imi.ImiDocumentImporter#reportImportStatus(de.uka.ipd.idaho.goldenGateServer.GoldenGateServerComponent.ComponentActionConsole)
+	 */
+	public void reportImportStatus(ComponentActionConsole cac) {
+		if (this.decodingStart == -1)
+			cac.reportResult("There is no document importing at the moment");
+		else this.reportImportStatus(cac, false);
+	}
+	void reportImportStatus(ComponentActionConsole cac, boolean internal) {
+		if (this.decodingStart == -1)
+			cac.reportResult("There is no document importing at the moment");
+		else {
+			long time = System.currentTimeMillis();
+			cac.reportResult(((this.isMainDecoder && internal) ? "Importing" : (this.name + ": importing")) + " document " + this.decodingDocId + " (started " + (time - this.decodingStart) + "ms ago, at " + this.decodingProgress + "%)");
+			cac.reportResult(" - params are " + this.decodingParams);
+			cac.reportResult(" - current step is " + this.decodingStep + " (since " + (time - this.decodingStepStart) + "ms)");
+			cac.reportResult(" - current info is " + this.decodingInfo + " (since " + (time - this.decodingInfoStart) + "ms)");
+		}
+	}
+	
+	/* (non-Javadoc)
+	 * @see de.uka.ipd.idaho.goldenGateServer.imi.ImiDocumentImporter#getRuntimeClone(java.lang.String)
+	 */
+	public ImiDocumentImporter getRuntimeClone(String name) {
+		if (this.isMainDecoder)
+			return new PdfImporter(this, name);
+		else throw new IllegalStateException("Runtime clones cannot be cloned");
 	}
 	
 	/* (non-Javadoc)
@@ -368,11 +464,13 @@ public class PdfImporter extends ImiDocumentImporter {
 			this.decoderRun = null;
 			this.decoderInterface = null;
 			this.decodingDocId = null;
+			this.decodingParams = null;
 			this.decodingStart = -1;
 			this.decodingStep = null;
 			this.decodingStepStart = -1;
 			this.decodingInfo = null;
 			this.decodingInfoStart = -1;
+			this.decodingProgress = -1;
 		}
 	}
 	
@@ -403,6 +501,13 @@ public class PdfImporter extends ImiDocumentImporter {
 		}
 		if ((idi.removeAttribute("overwriteExisting") == null) && docExists)
 			throw new IOException("Document '" + docInFileHash + "' imported before.");
+		
+		//	retain parameters in case of error
+		TreeMap idiParams = new TreeMap();
+		String[] idiParamNames = idi.getAttributeNames();
+		for (int n = 0; n < idiParamNames.length; n++)
+			idiParams.put(idiParamNames[n], idi.getAttribute(idiParamNames[n]));
+		String idiParamString = idiParams.toString();
 		
 		//	check if we know born-digital or scanned (assume meta pages in the latter case for good measures)
 		String bornDigital = ((String) idi.removeAttribute("isBornDigital"));
@@ -439,58 +544,7 @@ public class PdfImporter extends ImiDocumentImporter {
 		}
 		
 		//	read verbose flag
-		boolean verbose = (idi.removeAttribute("verbose") != null);
-//		
-//		//	assemble command
-//		StringVector command = new StringVector();
-//		command.addElement("java");
-//		command.addElement("-jar");
-//		if (this.maxSlaveMemory > 512)
-//			command.addElement("-Xmx" + this.maxSlaveMemory + "m");
-//		command.addElement("PdfImporterSlave.jar");
-//		
-//		//	add parameters
-//		command.addElement("-s"); // source: file from importer job
-//		command.addElement(docInFile.getAbsolutePath());
-//		command.addElement("-c"); // cache: cache folder
-//		command.addElement(docCacheFolder.getAbsolutePath());
-//		command.addElement("-p"); // CPU usage: single (slower, but we don't want to knock out the whole server)
-//		int maxSlaveCores = this.maxSlaveCores;
-//		if (maxSlaveCores < 1)
-//			maxSlaveCores = 65536;
-//		if ((maxSlaveCores * 4) > Runtime.getRuntime().availableProcessors())
-//			maxSlaveCores = (Runtime.getRuntime().availableProcessors() / 4);
-//		if (maxSlaveCores == 1)
-//			command.addElement("S");
-//		else command.addElement("" + maxSlaveCores);
-//		if (this.docStyleFolder != null) {
-//			command.addElement("-y"); // style path: the folder holding document styles
-//			command.addElement(this.docStyleFolder.getAbsolutePath());
-//		}
-//		if (this.docStyleListUrl != null) {
-//			command.addElement("-u"); // style path: the folder holding document styles
-//			command.addElement(this.docStyleListUrl);
-//		}
-//		command.addElement("-t"); // PDF type
-//		command.addElement(pdfType);
-//		if ("D".equals(pdfType)) {
-//			command.addElement("-f"); // font decoding mode: fully decode
-//			command.addElement("D");
-//			command.addElement("-cs"); // font decoding charset
-//			if (this.fontCharsetPath == null)
-//				command.addElement("U"); // no font decoding charset specified, fall back to Unicode
-//			else {
-//				command.addElement("C"); // custom font decoding charset: load from file or URL
-//				command.addElement("-cp"); // path (file or URL) to load font decoding charset from
-//				command.addElement(this.fontCharsetPath);
-//			}
-//		}
-//		else if (scanDecodeFlags != -1) {
-//			command.addElement("-sf"); // scan decode flags as specified
-//			command.addElement(Integer.toString(scanDecodeFlags, 16).toUpperCase());
-//		}
-//		command.addElement("-o"); // output destination: document output folder
-//		command.addElement(docOutFolder.getAbsolutePath());
+		boolean verbose = ((idi.removeAttribute("verbose") != null) || this.decodeVerbose);
 		
 		//	assemble decoder slave job
 		SyncPdfSlaveJob spsj = new SyncPdfSlaveJob(docInFileHash);
@@ -513,23 +567,32 @@ public class PdfImporter extends ImiDocumentImporter {
 		//	start document decoder slave process
 		this.decoderRun = Runtime.getRuntime().exec(spsj.getCommand(docCacheFolder.getAbsolutePath()), new String[0], this.workingFolder);
 		this.decodingDocId = docInFileHash;
+		this.decodingParams = idiParamString;
 		
-		//	set up communication slave process communication
-		this.decoderInterface = new SyncPdfSlaveProcessInterface(this.decoderRun, ("SyncPdf" + idi.hashCode()));
+		//	set up slave process communication
+		this.decoderInterface = new SyncPdfSlaveProcessInterface(this.decoderRun, ("SyncPdf" + idi.hashCode()), docInFileHash, docInFile.getName(), idiParamString, verbose);
 		this.decoderInterface.setProgressMonitor(new ProgressMonitor() {
 			public void setStep(String step) {
-				host.logInfo(step);
+				host.logInfo(getName() + ": " + step);
 				decodingStep = step;
 				decodingStepStart = System.currentTimeMillis();
 			}
 			public void setInfo(String info) {
-				host.logDebug(info);
+				host.logDebug(getName() + ": " + info);
 				decodingInfo = info;
 				decodingInfoStart = System.currentTimeMillis();
 			}
-			public void setBaseProgress(int baseProgress) {}
-			public void setMaxProgress(int maxProgress) {}
-			public void setProgress(int progress) {}
+			private int baseProgress = 0;
+			private int maxProgress = 0;
+			public void setBaseProgress(int baseProgress) {
+				this.baseProgress = baseProgress;
+			}
+			public void setMaxProgress(int maxProgress) {
+				this.maxProgress = maxProgress;
+			}
+			public void setProgress(int progress) {
+				decodingProgress = (this.baseProgress + (((this.maxProgress - this.baseProgress) * progress) / 100));
+			}
 		});
 		this.decoderInterface.start();
 		
@@ -539,25 +602,43 @@ public class PdfImporter extends ImiDocumentImporter {
 			break;
 		} catch (InterruptedException ie) {}
 		
-		//	create document on top of import result
-		ImDocument doc = ImDocumentIO.loadDocument(docOutFolder, new ProgressMonitor() {
-			public void setStep(String step) {
-				host.logInfo(step);
-			}
-			public void setInfo(String info) {
-				host.logDebug(info);
-			}
-			public void setBaseProgress(int baseProgress) {}
-			public void setMaxProgress(int maxProgress) {}
-			public void setProgress(int progress) {}
-		});
+		try {
+			
+			//	create document on top of import result
+			ImDocument doc = ImDocumentIO.loadDocument(docOutFolder, new ProgressMonitor() {
+				public void setStep(String step) {
+					host.logInfo(getName() + ": " + step);
+				}
+				public void setInfo(String info) {
+					host.logDebug(getName() + ": " + info);
+				}
+				public void setBaseProgress(int baseProgress) {}
+				public void setMaxProgress(int maxProgress) {}
+				public void setProgress(int progress) {}
+			});
+			
+			//	hand document back to caller via idi.setDocument()
+			idi.setDocument(doc);
+		}
 		
-		//	hand document back to caller via idi.setDocument()
-		idi.setDocument(doc);
+		//	report whatever error might have occurred
+		catch (IOException ioe) {
+			this.host.logError(this.getName() + ": failed to load import result - " + ioe.getMessage());
+			this.host.logError(ioe);
+			
+			//	report as slave process error (need to go via strings to fit parameters)
+			StackTraceElement[] stes = ioe.getStackTrace();
+			String[] errorStackTrace = new String[stes.length];
+			for (int e = 0; e < stes.length; e++)
+				errorStackTrace[e] = ("\tat " + stes[e]);
+			SlaveErrorRecorder.recordError((this.parent.getLetterCode() + "." + this.getName()), docInFileHash, ioe.getClass().getName(), (ioe.getMessage() + " (in " + docInFile.getName() + ", params " + idiParamString + ")"), errorStackTrace);
+		}
 		
 		//	clean up cache and document data
-		cleanupFile(docCacheFolder);
-		cleanupFile(docOutFolder);
+		finally {
+			cleanupFile(docCacheFolder);
+			cleanupFile(docOutFolder);
+		}
 	}
 	
 	private static String getDocInFileChecksum(File docInFile) throws IOException {
@@ -612,23 +693,84 @@ public class PdfImporter extends ImiDocumentImporter {
 	
 	private class SyncPdfSlaveProcessInterface extends SlaveProcessInterface {
 		private ComponentActionConsole reportTo = null;
-		SyncPdfSlaveProcessInterface(Process slave, String slaveName) {
+		private String docId;
+		private String pdfFileName;
+		private String importParams;
+		private boolean verbose;
+		SyncPdfSlaveProcessInterface(Process slave, String slaveName, String docId, String pdfFileName, String importParams, boolean verbose) {
 			super(slave, slaveName);
+			this.docId = docId;
+			this.pdfFileName = pdfFileName;
+			this.importParams = importParams;
+			this.verbose = verbose;
 		}
 		void setReportTo(ComponentActionConsole reportTo) {
 			this.reportTo = reportTo;
 		}
+		protected void handleInput(String input) {
+			if (this.verbose)
+				host.logInfo(getName() + ": " + input);
+		}
 		protected void handleResult(String result) {
 			ComponentActionConsole cac = this.reportTo;
 			if (cac == null)
-				host.logInfo(result);
+				host.logInfo(getName() + ": " + result);
 			else cac.reportResult(result);
 		}
-		protected void handleError(String error) {
+		private ArrayList outStackTrace = new ArrayList();
+		protected void handleStackTrace(String stackTraceLine) {
+			if (stackTraceLine.trim().length() == 0)
+				this.reportError(this.outStackTrace);
+			else {
+				this.outStackTrace.add(stackTraceLine);
+				super.handleStackTrace(stackTraceLine);
+			}
+		}
+		protected void finalizeSystemOut() {
+			this.reportError(this.outStackTrace);
+		}
+		private ArrayList errStackTrace = new ArrayList();
+		protected void handleError(String error, boolean fromSysErr) {
 			ComponentActionConsole cac = this.reportTo;
-			if (cac == null)
-				host.logError(error);
+			if (fromSysErr && (cac == null)) {
+				if (error.startsWith("CR\t") || error.startsWith("LA\t") || error.startsWith("Stale "))
+					return; // TODO remove this once server fixed
+				if (error.matches("(Im|Gamta)Document(Root)?Guard\\:.*"))
+					return; // TODO remove this once server fixed
+				if (error.startsWith("Font 'Free") && error.endsWith("' loaded successfully."))
+					return;
+				if (error.endsWith(" org.icepdf.core.pobjects.Document <clinit>"))
+					return;
+				if (error.equals("WARNING: PDF write support was not found on the class path"))
+					return;
+			}
+			if (cac == null) {
+				if (fromSysErr)
+					this.errStackTrace.add(error);
+				host.logError(getName() + ": " + error);
+			}
 			else cac.reportError(error);
+		}
+		protected void finalizeSystemErr() {
+			this.reportError(this.errStackTrace);
+		}
+		private void reportError(ArrayList stackTrace) {
+			if (stackTrace.size() == 0)
+				return;
+			String classAndMessge = ((String) stackTrace.get(0));
+			String errorClassName;
+			String errorMessage;
+			if (classAndMessge.indexOf(":") == -1) {
+				errorClassName = classAndMessge;
+				errorMessage = "";
+			}
+			else {
+				errorClassName = classAndMessge.substring(0, classAndMessge.indexOf(":")).trim();
+				errorMessage = classAndMessge.substring(classAndMessge.indexOf(":") + ":".length()).trim();
+			}
+			String[] errorStackTrace = ((String[]) stackTrace.toArray(new String[stackTrace.size()]));
+			stackTrace.clear();
+			SlaveErrorRecorder.recordError((parent.getLetterCode() + "." + getName()), this.docId, errorClassName, (errorMessage + " (in " + this.pdfFileName + ", params " + this.importParams + ")"), errorStackTrace);
 		}
 	}
 }

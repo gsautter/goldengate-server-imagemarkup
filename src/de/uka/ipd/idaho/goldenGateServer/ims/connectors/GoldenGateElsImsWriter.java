@@ -144,7 +144,6 @@ public class GoldenGateElsImsWriter extends LinkWriter {
 			//	store any changes
 			if (docTracker.docChanged)
 				this.ims.updateDocument(this.getUpdateUserName(), UPDATE_USER_NAME, doc, this);
-			doc.dispose();
 			
 			//	return whatever is left
 			return links;
@@ -159,6 +158,7 @@ public class GoldenGateElsImsWriter extends LinkWriter {
 		//	make sure to remove listener and release document under all circumstances
 		finally {
 			doc.removeDocumentListener(docTracker);
+			doc.dispose();
 			this.ims.releaseDocument(UPDATE_USER_NAME, dataId);
 		}
 	}

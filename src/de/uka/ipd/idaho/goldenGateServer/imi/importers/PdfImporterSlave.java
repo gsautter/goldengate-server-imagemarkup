@@ -46,7 +46,6 @@ import de.uka.ipd.idaho.gamta.util.AnalyzerDataProvider;
 import de.uka.ipd.idaho.gamta.util.AnalyzerDataProviderFileBased;
 import de.uka.ipd.idaho.gamta.util.DocumentStyle;
 import de.uka.ipd.idaho.gamta.util.DocumentStyle.Data;
-import de.uka.ipd.idaho.gamta.util.DocumentStyleProvider;
 import de.uka.ipd.idaho.gamta.util.ProgressMonitor;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImage;
 import de.uka.ipd.idaho.gamta.util.imaging.PageImageInputStream;
@@ -63,6 +62,7 @@ import de.uka.ipd.idaho.im.pdf.PdfFontDecoder.CustomFontDecoderCharset;
 import de.uka.ipd.idaho.im.pdf.PdfFontDecoder.FontDecoderCharset;
 import de.uka.ipd.idaho.im.util.ImDocumentIO;
 import de.uka.ipd.idaho.im.util.ImDocumentStyle;
+import de.uka.ipd.idaho.im.util.ImDocumentStyleProvider;
 import de.uka.ipd.idaho.im.util.ImSupplementCache;
 
 /**
@@ -255,13 +255,12 @@ public class PdfImporterSlave implements SlaveConstants {
 		//	create document style provider
 		String docStylePath = argsMap.getProperty("DSPATH");
 		String docStyleListUrl = argsMap.getProperty("DSURL");
+		System.out.println("ImiPdfDecoder: document styles are from " + docStylePath + " and " + docStyleListUrl);
 		if (docStylePath != null) try {
-			DocumentStyleProvider dsp = new DocumentStyleProvider(docStyleListUrl, new File(docStylePath), ".docStyle") {
-				protected DocumentStyle wrapDocumentStyleData(Data data) {
-					return new ImDocumentStyle(data);
-				}
-			};
+			PisDocumentStyleProvider dsp = new PisDocumentStyleProvider(docStyleListUrl, new File(docStylePath));
+			System.out.println("ImiPdfDecoder: document style provider created");
 			dsp.init();
+			System.out.println("ImiPdfDecoder: document style provider initialized");
 		}
 		catch (IOException ioe) {
 			mpi.sendError("Could not load document style templates: " + ioe.getMessage());
@@ -356,6 +355,32 @@ public class PdfImporterSlave implements SlaveConstants {
 			fdcIn = new BufferedReader(new InputStreamReader(new FileInputStream(new File(path)), "UTF-8"));
 		else throw new IllegalArgumentException("Inavlid charset path " + path);
 		return CustomFontDecoderCharset.readCharSet("Custom", fdcIn);
+	}
+	
+	private static class PisDocumentStyleProvider extends ImDocumentStyleProvider {
+		public PisDocumentStyleProvider(String docStyleListUrl, File docStyleFolder) {
+			super(docStyleListUrl, docStyleFolder, ".docStyle");
+		}
+		protected DocumentStyle wrapDocumentStyleData(Data data) {
+			return new PisDocumentStyle(data);
+		}
+		private static class PisDocumentStyle extends ImDocumentStyle {
+			public PisDocumentStyle(Data data) {
+				super(data);
+			}
+			public String getPropertyData(String key) {
+				String data = super.getPropertyData(key);
+				if (data != null)
+					return data;
+				//	emulate anchor specific settings for maximum page ID using Image Markup PDF specific fallback
+				if ((Anchor.ANCHOR_PREFIX + "." + PageFeatureAnchor.MAXIMUM_PAGES_AFTER_FIRST_PROPERTY).equals(key)) {
+					data = this.getPropertyData("layout.coverPageCount");
+					if (data == null)
+						data = "0";
+				}
+				return data;
+			}
+		}
 	}
 	
 	private static class PisPageImageStore extends AbstractPageImageStore {

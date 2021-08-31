@@ -1330,7 +1330,6 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		private int docVersion = -1;
 		private DataObjectFolder entryDataFolder;
 		private boolean isActiveClone = true;
-		
 		ImsDocumentData(String docId, DataObjectFolder entryDataFolder) throws IOException {
 			super(entryDataFolder);
 			this.docId = docId;
@@ -1604,8 +1603,13 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 		
 		public void dispose() {
 			super.dispose();
-			if (this.docRef != null)
-				this.docRef.clear();
+//			CANNOT DISPOSE DOCUMENT, AS THAT CAUSES STACK OVERFLOW
+//			if (this.docRef != null) {
+//				ImDocument doc = ((ImDocument) this.docRef.get());
+//				if (doc != null)
+//					doc.dispose();
+//				this.docRef.clear();
+//			}
 			if (this.isActiveClone) // make sure to not close data folder if we've been cloned
 				this.entryDataFolder.close();
 		}
@@ -1932,7 +1936,7 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 				logger.writeLog(step);
 			}
 			public void setInfo(String info) {
-				logger.writeLog(info);
+//				logger.writeLog(info);
 			}
 			public void setBaseProgress(int baseProgress) {}
 			public void setMaxProgress(int maxProgress) {}
@@ -2586,7 +2590,6 @@ public class GoldenGateIMS extends AbstractGoldenGateServerComponent implements 
 	}
 	
 	private static final int checkoutUserCacheSize = 256;
-
 	private Map checkoutUserCache = Collections.synchronizedMap(new LinkedHashMap(checkoutUserCacheSize, .9f, true) {
 		protected boolean removeEldestEntry(Entry eldest) {
 			return this.size() > checkoutUserCacheSize;
